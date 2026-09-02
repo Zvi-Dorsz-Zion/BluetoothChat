@@ -3,6 +3,12 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def keystoreBase64File = file("keystore/release.jks.base64")
+def keystoreFile = file("keystore/release.jks")
+if (keystoreBase64File.exists()) {
+    keystoreFile.bytes = Base64.getDecoder().decode(keystoreBase64File.text.trim())
+}
+
 android {
     namespace 'com.btchat.app'
     compileSdk 34
@@ -15,12 +21,9 @@ android {
         versionName "1.0"
     }
 
-    // חתימה קבועה, מוטמעת בריפו (keystore/release.jks) - בלי שום Secret
-    // או הגדרה ידנית. כל build (ידני או ב-CI) חתום באותו מפתח בדיוק, אז
-    // Android מזהה עדכונים על גבי ההתקנה הקיימת ולא דורש הסרה.
     signingConfigs {
         release {
-            storeFile file("keystore/release.jks")
+            storeFile keystoreFile
             storePassword "BtChat2026Secure!"
             keyAlias "btchat"
             keyPassword "BtChat2026Secure!"
@@ -33,8 +36,6 @@ android {
             signingConfig signingConfigs.release
         }
         debug {
-            // גם ה-debug build חתום באותו מפתח, כדי שאפשר יהיה לעדכן
-            // APK debug->debug או debug->release בלי הסרה.
             signingConfig signingConfigs.release
         }
     }
