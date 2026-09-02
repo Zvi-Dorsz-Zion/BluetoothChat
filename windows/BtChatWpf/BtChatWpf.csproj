@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BtChatWpf</RootNamespace>
+    <AssemblyName>BtChat</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 32feet.NET: classic Win32 Bluetooth (RFCOMM/SPP) - client + server sockets,
+         no MSIX packaging or app capabilities required. -->
+    <PackageReference Include="InTheHand.Net.Bluetooth" Version="4.1.14" />
+  </ItemGroup>
+
+</Project>

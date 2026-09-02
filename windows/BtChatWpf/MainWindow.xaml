@@ -1,0 +1,31 @@
+<Window x:Class="BtChatWpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="BT Chat" Height="500" Width="420"
+        FlowDirection="RightToLeft">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
+            <Button x:Name="BtnListen" Content="האזן לחיבורים" Width="180" Margin="0,0,8,0" Click="BtnListen_Click"/>
+            <Button x:Name="BtnPickDevice" Content="התחבר למכשיר" Width="180" Click="BtnPickDevice_Click"/>
+        </StackPanel>
+
+        <TextBlock x:Name="TxtStatus" Grid.Row="1" Text="לא מחובר" FontStyle="Italic" Margin="0,0,0,8"/>
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" x:Name="ChatScroll">
+            <TextBlock x:Name="TxtChat" TextWrapping="Wrap"/>
+        </ScrollViewer>
+
+        <DockPanel Grid.Row="3" Margin="0,8,0,0">
+            <Button x:Name="BtnAttach" Content="📎" Width="32" DockPanel.Dock="Right" Margin="8,0,0,0" Click="BtnAttach_Click"/>
+            <Button x:Name="BtnSend" Content="שלח" Width="60" DockPanel.Dock="Right" Margin="8,0,0,0" Click="BtnSend_Click"/>
+            <TextBox x:Name="EditMessage" VerticalContentAlignment="Center" KeyDown="EditMessage_KeyDown"/>
+        </DockPanel>
+    </Grid>
+</Window>
