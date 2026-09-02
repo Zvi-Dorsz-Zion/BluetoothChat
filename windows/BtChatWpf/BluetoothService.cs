@@ -2,16 +2,13 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Net.Sockets;
 using InTheHand.Net;
 using InTheHand.Net.Bluetooth;
 using InTheHand.Net.Sockets;
 
 namespace BtChatWpf;
 
-/// <summary>
-/// Wraps a single Bluetooth RFCOMM (SPP) connection. Can act as SERVER (listen)
-/// or CLIENT (connect to a paired device) - mirrors the Android BluetoothService.
-/// </summary>
 public class BluetoothService
 {
     public event Action<string>? Connected;
@@ -45,7 +42,7 @@ public class BluetoothService
             {
                 _listener = new BluetoothListener(BtProtocol.SppUuid);
                 _listener.Start();
-                var client = _listener.AcceptBluetoothClient(); // blocks until a peer connects
+                var client = _listener.AcceptBluetoothClient();
                 _listener.Stop();
                 Attach(client);
             }
