@@ -15,9 +15,27 @@ android {
         versionName "1.0"
     }
 
+    // חתימה קבועה, מוטמעת בריפו (keystore/release.jks) - בלי שום Secret
+    // או הגדרה ידנית. כל build (ידני או ב-CI) חתום באותו מפתח בדיוק, אז
+    // Android מזהה עדכונים על גבי ההתקנה הקיימת ולא דורש הסרה.
+    signingConfigs {
+        release {
+            storeFile file("keystore/release.jks")
+            storePassword "BtChat2026Secure!"
+            keyAlias "btchat"
+            keyPassword "BtChat2026Secure!"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            // גם ה-debug build חתום באותו מפתח, כדי שאפשר יהיה לעדכן
+            // APK debug->debug או debug->release בלי הסרה.
+            signingConfig signingConfigs.release
         }
     }
 
