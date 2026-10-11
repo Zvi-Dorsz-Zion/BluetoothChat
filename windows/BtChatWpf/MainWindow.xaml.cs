@@ -10,20 +10,47 @@ namespace BtChatWpf;
 public partial class MainWindow : Window
 {
     private readonly BluetoothService _bt = new();
+    private readonly System.Windows.Forms.NotifyIcon _notifyIcon = new();
 
     public MainWindow()
     {
         InitializeComponent();
 
+        _notifyIcon.Icon = System.Drawing.SystemIcons.Information;
+        _notifyIcon.Text = "BT Chat";
+        _notifyIcon.Visible = true;
+        _notifyIcon.BalloonTipClicked += (_, _) => Dispatcher.Invoke(BringToFront);
+
         _bt.Connected += name => Dispatcher.Invoke(() => TxtStatus.Text = $"מחובר אל: {name}");
         _bt.Disconnected += () => Dispatcher.Invoke(() => TxtStatus.Text = "מנותק");
-        _bt.TextReceived += text => Dispatcher.Invoke(() => AppendChat($"הם: {text}"));
-        _bt.FileReceived += (name, bytes) => Dispatcher.Invoke(() => SaveIncomingFile(name, bytes));
+        _bt.TextReceived += text => Dispatcher.Invoke(() =>
+        {
+            AppendChat($"הם: {text}");
+            Notify("הודעה חדשה", text);
+        });
+        _bt.FileReceived += (name, bytes) => Dispatcher.Invoke(() =>
+        {
+            SaveIncomingFile(name, bytes);
+            Notify("התקבל קובץ", name);
+        });
         _bt.Error += msg => Dispatcher.Invoke(() =>
         {
             TxtStatus.Text = "שגיאה";
             MessageBox.Show(msg, "שגיאה", MessageBoxButton.OK, MessageBoxImage.Warning);
         });
+    }
+
+    private void Notify(string title, string body)
+    {
+        if (IsActive) return;
+        if (body.Length > 200) body = body.Substring(0, 200) + "...";
+        _notifyIcon.ShowBalloonTip(5000, title, body, System.Windows.Forms.ToolTipIcon.Info);
+    }
+
+    private void BringToFront()
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
     }
 
     private void BtnListen_Click(object sender, RoutedEventArgs e)
@@ -97,6 +124,8 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _notifyIcon.Visible = false;
+        _notifyIcon.Dispose();
         _bt.Stop();
     }
 }

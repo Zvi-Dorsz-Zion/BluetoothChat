@@ -17,7 +17,7 @@ android {
         applicationId "com.btchat.app"
         minSdk 26
         targetSdk 34
-        versionCode 1
+        versionCode Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
         versionName "1.0"
     }
 
