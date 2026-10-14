@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand">#1E6FE8</color>
+    <color name="brand_dark">#1553B8</color>
+    <color name="ic_launcher_background">#1E6FE8</color>
+    <color name="toolbar_subtitle">#D6E4FF</color>
+
+    <color name="surface">#FFFFFF</color>
+    <color name="chat_bg">#EEF2F7</color>
+    <color name="bubble_out">#D7E6FF</color>
+    <color name="bubble_in">#FFFFFF</color>
+    <color name="file_icon_bg">#E3EDFD</color>
+    <color name="input_bg">#F1F3F6</color>
+
+    <color name="text_primary">#1A1C1E</color>
+    <color name="text_secondary">#62666D</color>
+
+    <color name="banner_ok">#E2F5E8</color>
+    <color name="banner_neutral">#E6EDF8</color>
+    <color name="banner_warn">#FFF0D6</color>
+    <color name="status_on">#22A559</color>
+    <color name="status_off">#9AA0A6</color>
+</resources>

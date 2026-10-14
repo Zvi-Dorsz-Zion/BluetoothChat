@@ -1,31 +1,280 @@
 <Window x:Class="BtChatWpf.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="BT Chat" Height="500" Width="420"
-        FlowDirection="RightToLeft">
-    <Grid Margin="12">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+        Title="BT Chat" Height="640" Width="960" MinWidth="380" MinHeight="420"
+        FlowDirection="RightToLeft" FontFamily="Segoe UI" Icon="/app.ico"
+        Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen"
+        AllowDrop="True" DragEnter="Window_DragEnter" DragLeave="Window_DragLeave" Drop="Window_Drop"
+        SizeChanged="Window_SizeChanged" Closing="Window_Closing">
 
-        <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
-            <Button x:Name="BtnListen" Content="האזן לחיבורים" Width="180" Margin="0,0,8,0" Click="BtnListen_Click"/>
-            <Button x:Name="BtnPickDevice" Content="התחבר למכשיר" Width="180" Click="BtnPickDevice_Click"/>
-        </StackPanel>
+    <Window.Resources>
+        <!-- Device row context menu -->
+        <ContextMenu x:Key="DeviceMenu" x:Shared="False">
+            <MenuItem Header="התחבר" Click="DeviceMenuConnect_Click"/>
+            <MenuItem Header="שנה שם..." Click="DeviceMenuRename_Click"/>
+            <Separator/>
+            <MenuItem Header="מחק היסטוריה" Click="DeviceMenuClear_Click"/>
+        </ContextMenu>
 
-        <TextBlock x:Name="TxtStatus" Grid.Row="1" Text="לא מחובר" FontStyle="Italic" Margin="0,0,0,8"/>
+        <Style x:Key="DeviceItemStyle" TargetType="ListBoxItem">
+            <Setter Property="ContextMenu" Value="{StaticResource DeviceMenu}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" Margin="6,1" CornerRadius="8">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#F3F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource BrandLight}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" x:Name="ChatScroll">
-            <TextBlock x:Name="TxtChat" TextWrapping="Wrap"/>
-        </ScrollViewer>
+        <Style x:Key="MessageItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <ContentPresenter/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-        <DockPanel Grid.Row="3" Margin="0,8,0,0">
-            <Button x:Name="BtnAttach" Content="📎" Width="32" DockPanel.Dock="Right" Margin="8,0,0,0" Click="BtnAttach_Click"/>
-            <Button x:Name="BtnSend" Content="שלח" Width="60" DockPanel.Dock="Right" Margin="8,0,0,0" Click="BtnSend_Click"/>
-            <TextBox x:Name="EditMessage" VerticalContentAlignment="Center" KeyDown="EditMessage_KeyDown"/>
-        </DockPanel>
+        <DataTemplate x:Key="MessageTemplate">
+            <Border x:Name="Bubble" CornerRadius="12" Padding="11,7,11,5" Margin="12,3" MaxWidth="560"
+                    HorizontalAlignment="Left" Background="{StaticResource BubbleIn}"
+                    BorderBrush="{StaticResource Line}" BorderThickness="1">
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="העתק טקסט" Click="MenuCopyText_Click"
+                                  Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}"/>
+                        <MenuItem Header="פתח" Click="MenuOpen_Click"
+                                  Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
+                        <MenuItem Header="הצג בתיקייה" Click="MenuShowInFolder_Click"
+                                  Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
+                        <MenuItem Header="העתק נתיב" Click="MenuCopyPath_Click"
+                                  Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
+                    </ContextMenu>
+                </Border.ContextMenu>
+                <StackPanel>
+                    <!-- Text message: read-only TextBox so text can be selected and copied -->
+                    <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                             Background="Transparent" TextWrapping="Wrap" Padding="0" FontSize="14"
+                             Foreground="{StaticResource TextMain}"
+                             Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}"/>
+
+                    <!-- File message -->
+                    <StackPanel Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"
+                                Background="Transparent" Cursor="Hand" MinWidth="200"
+                                MouseLeftButtonUp="File_Click" ToolTip="לחץ לפתיחה · לחצן ימני לאפשרויות">
+                        <Image Source="{Binding Thumbnail}" MaxHeight="220" MaxWidth="320" Stretch="Uniform"
+                               HorizontalAlignment="Left" Margin="0,2,0,6" FlowDirection="LeftToRight"
+                               Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}"/>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="8"
+                                    Background="{StaticResource BrandLight}">
+                                <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE8A5;" FontSize="17"
+                                           Foreground="{StaticResource Brand}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" FontSize="13.5"
+                                           TextTrimming="CharacterEllipsis" Foreground="{StaticResource TextMain}"/>
+                                <TextBlock Text="{Binding FileInfoText}" FontSize="11.5" Foreground="{StaticResource TextSub}"/>
+                            </StackPanel>
+                        </DockPanel>
+                        <ProgressBar Height="4" Margin="0,7,0,0" Maximum="100" Value="{Binding Progress}"
+                                     Foreground="{StaticResource Brand}" Background="{StaticResource BrandLight}"
+                                     BorderThickness="0"
+                                     Visibility="{Binding IsInProgress, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding MetaText}" FontSize="10.5" Foreground="{StaticResource TextSub}"
+                               HorizontalAlignment="Right" Margin="0,3,0,0"/>
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Outgoing}" Value="True">
+                    <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right"/>
+                    <Setter TargetName="Bubble" Property="Background" Value="{StaticResource BubbleOut}"/>
+                    <Setter TargetName="Bubble" Property="BorderThickness" Value="0"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="SidebarColumn" Width="280"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ============ Sidebar: devices ============ -->
+        <Border x:Name="Sidebar" Grid.Column="0" Background="{StaticResource Surface}"
+                BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <Border DockPanel.Dock="Top" Background="{StaticResource Brand}" Padding="16,14">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE702;" Foreground="White"
+                                       FontSize="18" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBlock Text="BT Chat" Foreground="White" FontSize="18" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TxtListenState" Text="מכין..." Foreground="#D6E4FF"
+                                   FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel DockPanel.Dock="Bottom" Margin="12">
+                    <Button Click="BtnPairNew_Click" HorizontalAlignment="Stretch" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE710;" Margin="0,0,8,0"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Text="צמד מכשיר חדש"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Click="BtnSettings_Click" HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE713;" Margin="0,0,8,0"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Text="הגדרות"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <TextBlock DockPanel.Dock="Top" Text="מכשירים" Margin="18,12,16,6"
+                           Foreground="{StaticResource TextSub}" FontSize="12"/>
+                <TextBlock x:Name="TxtNoDevices" DockPanel.Dock="Top" Margin="18,4,16,0" TextWrapping="Wrap"
+                           Foreground="{StaticResource TextSub}" FontSize="12" Visibility="Collapsed"
+                           Text="אין מכשירים מזווגים. לחץ &quot;צמד מכשיר חדש&quot;."/>
+
+                <ListBox x:Name="ListDevices" BorderThickness="0" Background="Transparent"
+                         ItemContainerStyle="{StaticResource DeviceItemStyle}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="ListDevices_SelectionChanged"
+                         MouseDoubleClick="ListDevices_MouseDoubleClick">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="10,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid Width="40" Height="40">
+                                    <Ellipse Fill="{StaticResource Brand}"/>
+                                    <TextBlock Text="{Binding Initial}" Foreground="White" FontWeight="SemiBold"
+                                               FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Ellipse Width="13" Height="13" Fill="{StaticResource Ok}" Stroke="White"
+                                             StrokeThickness="2" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                             Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}}"/>
+                                </Grid>
+                                <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="14"
+                                               Foreground="{StaticResource TextMain}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Subtitle}" Foreground="{StaticResource TextSub}"
+                                               FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- ============ Chat ============ -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="0,0,0,1" Padding="8">
+                <DockPanel>
+                    <Button x:Name="BtnToggleSidebar" DockPanel.Dock="Left" Style="{StaticResource IconButton}"
+                            Content="&#xE700;" ToolTip="רשימת מכשירים" Click="BtnToggleSidebar_Click"/>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnRename" Style="{StaticResource IconButton}" Content="&#xE70F;"
+                                ToolTip="שנה שם למכשיר" Click="BtnRename_Click"/>
+                        <Button x:Name="BtnConnect" Style="{StaticResource PrimaryButton}" Content="התחבר"
+                                MinWidth="84" Margin="6,0,0,0" Click="BtnConnect_Click"/>
+                    </StackPanel>
+                    <StackPanel VerticalAlignment="Center" Margin="6,0">
+                        <TextBlock x:Name="TxtPeerName" Text="בחר מכשיר" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextMain}" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{StaticResource Off}"
+                                     Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="TxtStatus" Text="לא מחובר" FontSize="12"
+                                       Foreground="{StaticResource TextSub}" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <ListBox x:Name="ListMessages" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                     Padding="0,8" HorizontalContentAlignment="Stretch"
+                     ItemContainerStyle="{StaticResource MessageItemStyle}"
+                     ItemTemplate="{StaticResource MessageTemplate}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.CanContentScroll="True"
+                     VirtualizingPanel.IsVirtualizing="True"
+                     VirtualizingPanel.ScrollUnit="Pixel"/>
+
+            <StackPanel x:Name="EmptyState" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center"
+                        IsHitTestVisible="False" Margin="24">
+                <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE8BD;" FontSize="48"
+                           Foreground="{StaticResource Off}" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="TxtEmpty" Text="אין הודעות עדיין" Margin="0,12,0,0" FontSize="14"
+                           Foreground="{StaticResource TextSub}" TextAlignment="Center" TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="0,1,0,0" Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="BtnAttach" Style="{StaticResource IconButton}" Content="&#xE723;"
+                            ToolTip="שלח קבצים (אפשר גם לגרור לחלון)" VerticalAlignment="Bottom" Click="BtnAttach_Click"/>
+                    <Grid Grid.Column="1" Margin="6,0">
+                        <TextBox x:Name="EditMessage" Style="{StaticResource InputBox}" AcceptsReturn="True"
+                                 TextWrapping="Wrap" MaxHeight="130" VerticalScrollBarVisibility="Auto"
+                                 PreviewKeyDown="EditMessage_PreviewKeyDown" TextChanged="EditMessage_TextChanged"/>
+                        <TextBlock x:Name="TxtPlaceholder" Text="הודעה" IsHitTestVisible="False"
+                                   Margin="15,0" VerticalAlignment="Center" FontSize="14"
+                                   Foreground="{StaticResource TextSub}"/>
+                    </Grid>
+                    <Button x:Name="BtnSend" Grid.Column="2" Style="{StaticResource SendButton}"
+                            ToolTip="שלח (Enter) · שורה חדשה: Shift+Enter" VerticalAlignment="Bottom" Click="BtnSend_Click">
+                        <TextBlock Text="&#xE724;" RenderTransformOrigin="0.5,0.5">
+                            <TextBlock.RenderTransform>
+                                <ScaleTransform ScaleX="-1"/>
+                            </TextBlock.RenderTransform>
+                        </TextBlock>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Shown while dragging files over the window -->
+            <Border x:Name="DropOverlay" Grid.RowSpan="3" Background="#CC1E6FE8" Visibility="Collapsed"
+                    IsHitTestVisible="False">
+                <TextBlock Text="שחרר כאן כדי לשלוח" Foreground="White" FontSize="22" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

@@ -5,7 +5,7 @@ using System.Text;
 namespace BtChatWpf;
 
 /// <summary>
-/// BT-Chat Protocol v1 (see /PROTOCOL.md at repo root).
+/// BT-Chat Protocol v2 (see /PROTOCOL.md at repo root).
 /// Frame = [1 byte type][4 bytes length, BIG-ENDIAN][payload]
 /// Must match the Android Kotlin implementation exactly.
 /// </summary>
@@ -16,94 +16,71 @@ public static class BtProtocol
 
     public const byte TypeText = 0x01;
     public const byte TypeFile = 0x02;
+    public const byte TypeAccept = 0x04;
+    public const byte TypeReject = 0x05;
 
-    public abstract record Message
+    public const int Chunk = 16 * 1024;
+    public const long MaxFileSize = int.MaxValue - 4096L;
+
+    public static void WriteControl(Stream output, byte type)
     {
-        public sealed record Text(string Value) : Message;
-        public sealed record FileReceived(string FileName, byte[] Bytes) : Message;
+        WriteHeader(output, type, 0);
+        output.Flush();
     }
 
-    public static void SendText(Stream output, string text)
+    public static void WriteText(Stream output, string text)
     {
         var payload = Encoding.UTF8.GetBytes(text);
-        WriteFrame(output, TypeText, payload);
+        WriteHeader(output, TypeText, payload.Length);
+        output.Write(payload, 0, payload.Length);
+        output.Flush();
     }
 
-    public static void SendFile(Stream output, string fileName, byte[] fileBytes)
+    /// Streams the file from <paramref name="input"/>; large files never sit fully in memory.
+    public static void WriteFile(Stream output, string fileName, long size, Stream input, Action<long> progress)
     {
+        if (fileName.Length > 200) fileName = fileName.Substring(0, 200);
         var nameBytes = Encoding.UTF8.GetBytes(fileName);
-        using var buffer = new MemoryStream();
-        WriteUInt16BigEndian(buffer, (ushort)nameBytes.Length);
-        buffer.Write(nameBytes, 0, nameBytes.Length);
-        buffer.Write(fileBytes, 0, fileBytes.Length);
-        WriteFrame(output, TypeFile, buffer.ToArray());
-    }
+        WriteHeader(output, TypeFile, checked((int)(2 + nameBytes.Length + size)));
+        output.Write(new[] { (byte)(nameBytes.Length >> 8), (byte)nameBytes.Length }, 0, 2);
+        output.Write(nameBytes, 0, nameBytes.Length);
 
-    private static void WriteFrame(Stream output, byte type, byte[] payload)
-    {
-        lock (output)
+        var buffer = new byte[Chunk];
+        long sent = 0;
+        while (sent < size)
         {
-            output.WriteByte(type);
-            WriteInt32BigEndian(output, payload.Length);
-            output.Write(payload, 0, payload.Length);
-            output.Flush();
+            int n = input.Read(buffer, 0, (int)Math.Min(buffer.Length, size - sent));
+            if (n <= 0) throw new IOException("הקובץ קצר מהצפוי");
+            output.Write(buffer, 0, n);
+            sent += n;
+            progress(sent);
         }
+        output.Flush();
     }
 
-    /// Blocking read of exactly one frame. Throws when the stream closes/errors.
-    public static Message ReadNextMessage(Stream input)
+    private static void WriteHeader(Stream s, byte type, int length)
     {
-        byte type = ReadByteStrict(input);
-        int length = ReadInt32BigEndian(input);
-        byte[] payload = ReadExact(input, length);
-
-        return type switch
+        var header = new byte[]
         {
-            TypeText => new Message.Text(Encoding.UTF8.GetString(payload)),
-            TypeFile => ParseFilePayload(payload),
-            _ => throw new InvalidDataException($"Unknown frame type: {type}")
+            type, (byte)(length >> 24), (byte)(length >> 16), (byte)(length >> 8), (byte)length
         };
+        s.Write(header, 0, header.Length);
     }
 
-    private static Message.FileReceived ParseFilePayload(byte[] payload)
-    {
-        int nameLen = (payload[0] << 8) | payload[1];
-        string fileName = Encoding.UTF8.GetString(payload, 2, nameLen);
-        byte[] fileBytes = new byte[payload.Length - 2 - nameLen];
-        Array.Copy(payload, 2 + nameLen, fileBytes, 0, fileBytes.Length);
-        return new Message.FileReceived(fileName, fileBytes);
-    }
-
-    // ---- Big-endian helpers (Stream has no built-in endianness control) ----
-
-    private static void WriteInt32BigEndian(Stream s, int value)
-    {
-        s.WriteByte((byte)(value >> 24));
-        s.WriteByte((byte)(value >> 16));
-        s.WriteByte((byte)(value >> 8));
-        s.WriteByte((byte)value);
-    }
-
-    private static void WriteUInt16BigEndian(Stream s, ushort value)
-    {
-        s.WriteByte((byte)(value >> 8));
-        s.WriteByte((byte)value);
-    }
-
-    private static int ReadInt32BigEndian(Stream s)
-    {
-        var b = ReadExact(s, 4);
-        return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
-    }
-
-    private static byte ReadByteStrict(Stream s)
+    public static byte ReadByteStrict(Stream s)
     {
         int b = s.ReadByte();
         if (b == -1) throw new IOException("Stream closed");
         return (byte)b;
     }
 
-    private static byte[] ReadExact(Stream s, int count)
+    public static int ReadInt32BigEndian(Stream s)
+    {
+        var b = ReadExact(s, 4);
+        return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
+    }
+
+    public static byte[] ReadExact(Stream s, int count)
     {
         var buffer = new byte[count];
         int offset = 0;
@@ -114,5 +91,16 @@ public static class BtProtocol
             offset += read;
         }
         return buffer;
+    }
+
+    public static void Skip(Stream s, long count)
+    {
+        var buffer = new byte[Chunk];
+        while (count > 0)
+        {
+            int read = s.Read(buffer, 0, (int)Math.Min(buffer.Length, count));
+            if (read <= 0) throw new IOException("Stream closed");
+            count -= read;
+        }
     }
 }

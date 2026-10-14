@@ -1,0 +1,106 @@
+package com.btchat.app
+
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.preference.Preference
+import androidx.preference.PreferenceFragmentCompat
+import com.btchat.app.databinding.ActivitySettingsBinding
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+
+class SettingsActivity : AppCompatActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val binding = ActivitySettingsBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        if (savedInstanceState == null) {
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.settingsContainer, SettingsFragment())
+                .commit()
+        }
+    }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
+    }
+
+    class SettingsFragment : PreferenceFragmentCompat() {
+
+        private val chat get() = (requireActivity().application as BtChatApp).controller
+
+        private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri != null) {
+                try {
+                    requireContext().contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    chat.prefs.saveTreeUri = uri.toString()
+                } catch (_: SecurityException) {
+                }
+                refresh()
+            }
+        }
+
+        override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
+            setPreferencesFromResource(R.xml.settings, rootKey)
+
+            findPreference<Preference>("save_folder")?.setOnPreferenceClickListener {
+                pickFolder.launch(null)
+                true
+            }
+            findPreference<Preference>("save_folder_reset")?.setOnPreferenceClickListener {
+                chat.prefs.saveTreeUri = null
+                refresh()
+                true
+            }
+            findPreference<Preference>("trusted_screen")?.setOnPreferenceClickListener {
+                showTrusted()
+                true
+            }
+            findPreference<Preference>("about")?.summary = try {
+                val ctx = requireContext()
+                "גרסה " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+            } catch (_: Exception) {
+                ""
+            }
+            refresh()
+        }
+
+        private fun refresh() {
+            findPreference<Preference>("save_folder")?.summary = chat.fileStore.folderLabel()
+            findPreference<Preference>("save_folder_reset")?.isVisible = chat.prefs.saveTreeUri != null
+            val count = chat.prefs.trustedDevices().size
+            findPreference<Preference>("trusted_screen")?.summary =
+                if (count == 0) "אין. כל חיבור נכנס דורש אישור." else "$count מכשירים מתחברים בלי לשאול"
+        }
+
+        private fun showTrusted() {
+            val trusted = chat.prefs.trustedDevices().toList()
+            if (trusted.isEmpty()) {
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle("מכשירים שמאושרים תמיד")
+                    .setMessage("אין מכשירים כאלה.\nכשמכשיר מבקש להתחבר, סמן \"אשר תמיד\" כדי להוסיף אותו.")
+                    .setPositiveButton("סגור", null)
+                    .show()
+                return
+            }
+            val names = trusted.map { "${chat.displayName(it)}  ($it)" }.toTypedArray()
+            val remove = BooleanArray(trusted.size)
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("סמן מכשירים להסרה")
+                .setMultiChoiceItems(names, remove) { _, which, checked -> remove[which] = checked }
+                .setPositiveButton("הסר מסומנים") { _, _ ->
+                    trusted.forEachIndexed { i, address -> if (remove[i]) chat.prefs.setTrusted(address, false) }
+                    refresh()
+                }
+                .setNegativeButton("ביטול", null)
+                .show()
+        }
+    }
+}

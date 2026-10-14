@@ -1,70 +1,77 @@
 package com.btchat.app
 
-import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.IOException
 import java.io.InputStream
-import java.io.OutputStream
 import java.util.UUID
 
 /**
- * BT-Chat Protocol v1 (see /PROTOCOL.md in repo root).
- * Frame = [1 byte type][4 bytes length][payload]
+ * BT-Chat Protocol v2 (see /PROTOCOL.md in repo root).
+ * Frame = [1 byte type][4 bytes length, big-endian][payload]
+ * Must match the Windows implementation exactly.
  */
 object BtProtocol {
     // Standard SPP UUID - MUST match the Windows side exactly.
     val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-    const val TYPE_TEXT: Byte = 0x01
-    const val TYPE_FILE: Byte = 0x02
+    const val TYPE_TEXT = 0x01
+    const val TYPE_FILE = 0x02
+    const val TYPE_ACCEPT = 0x04
+    const val TYPE_REJECT = 0x05
 
-    fun sendText(out: OutputStream, text: String) {
+    const val CHUNK = 16 * 1024
+    const val MAX_FILE_SIZE = Int.MAX_VALUE - 4096L
+
+    fun writeControl(out: DataOutputStream, type: Int) {
+        out.writeByte(type)
+        out.writeInt(0)
+        out.flush()
+    }
+
+    fun writeText(out: DataOutputStream, text: String) {
         val payload = text.toByteArray(Charsets.UTF_8)
-        writeFrame(out, TYPE_TEXT, payload)
+        out.writeByte(TYPE_TEXT)
+        out.writeInt(payload.size)
+        out.write(payload)
+        out.flush()
     }
 
-    fun sendFile(out: OutputStream, fileName: String, fileBytes: ByteArray) {
-        val nameBytes = fileName.toByteArray(Charsets.UTF_8)
-        val buffer = ByteArrayOutputStream()
-        val dos = DataOutputStream(buffer)
-        dos.writeShort(nameBytes.size)
-        dos.write(nameBytes)
-        dos.write(fileBytes)
-        writeFrame(out, TYPE_FILE, buffer.toByteArray())
-    }
-
-    private fun writeFrame(out: OutputStream, type: Byte, payload: ByteArray) {
-        val dos = DataOutputStream(out)
-        synchronized(out) {
-            dos.writeByte(type.toInt())
-            dos.writeInt(payload.size)
-            dos.write(payload)
-            dos.flush()
+    /** Streams the file straight from [input], so big files never sit fully in memory. */
+    fun writeFile(
+        out: DataOutputStream,
+        fileName: String,
+        size: Long,
+        input: InputStream,
+        onProgress: (Long) -> Unit
+    ) {
+        val nameBytes = fileName.take(200).toByteArray(Charsets.UTF_8)
+        out.writeByte(TYPE_FILE)
+        out.writeInt((2 + nameBytes.size + size).toInt())
+        out.writeShort(nameBytes.size)
+        out.write(nameBytes)
+        val buffer = ByteArray(CHUNK)
+        var sent = 0L
+        while (sent < size) {
+            val n = input.read(buffer, 0, minOf(CHUNK.toLong(), size - sent).toInt())
+            if (n < 0) throw IOException("הקובץ קצר מהצפוי")
+            out.write(buffer, 0, n)
+            sent += n
+            onProgress(sent)
         }
+        out.flush()
     }
 
-    sealed class Message {
-        data class Text(val text: String) : Message()
-        data class FileReceived(val fileName: String, val bytes: ByteArray) : Message()
-    }
-
-    /** Blocking read of exactly one frame. Throws on stream close/error. */
-    fun readNextMessage(input: InputStream): Message {
-        val dis = DataInputStream(input)
-        val type = dis.readByte()
-        val length = dis.readInt()
-        val payload = ByteArray(length)
-        dis.readFully(payload)
-
-        return when (type) {
-            TYPE_TEXT -> Message.Text(String(payload, Charsets.UTF_8))
-            TYPE_FILE -> {
-                val nameLen = ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
-                val fileName = String(payload, 2, nameLen, Charsets.UTF_8)
-                val fileBytes = payload.copyOfRange(2 + nameLen, payload.size)
-                Message.FileReceived(fileName, fileBytes)
+    fun skipFully(input: DataInputStream, count: Long) {
+        var left = count
+        while (left > 0) {
+            val skipped = input.skipBytes(minOf(left, Int.MAX_VALUE.toLong()).toInt())
+            if (skipped <= 0) {
+                input.readByte() // throws EOFException at end of stream
+                left--
+            } else {
+                left -= skipped
             }
-            else -> throw IllegalStateException("Unknown frame type: $type")
         }
     }
 }

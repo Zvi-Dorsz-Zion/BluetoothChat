@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
+        app:title="התראות">
+        <SwitchPreferenceCompat
+            app:defaultValue="true"
+            app:iconSpaceReserved="false"
+            app:key="notifications"
+            app:summary="התראה קופצת כשמגיעה הודעה או קובץ והאפליקציה לא פתוחה על המסך"
+            app:title="התראות על הודעות חדשות" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
+        app:title="קבצים ותמונות">
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="save_folder"
+            app:title="תיקיית שמירה לקבצים שמתקבלים" />
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="save_folder_reset"
+            app:summary="הורדות/BT Chat"
+            app:title="חזור לתיקיית ברירת המחדל" />
+        <ListPreference
+            app:defaultValue="ask"
+            app:entries="@array/quality_entries"
+            app:entryValues="@array/quality_values"
+            app:iconSpaceReserved="false"
+            app:key="image_quality"
+            app:title="איכות תמונות בשליחה"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
+        app:title="חיבורים">
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="trusted_screen"
+            app:title="מכשירים שמאושרים תמיד" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
+        app:title="אודות">
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="about"
+            app:selectable="false"
+            app:title="BT Chat" />
+    </PreferenceCategory>
+</PreferenceScreen>

@@ -1,0 +1,50 @@
+<Window x:Class="BtChatWpf.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="הגדרות - BT Chat" Width="500" Height="600" MinWidth="380" MinHeight="420"
+        WindowStartupLocation="CenterOwner" FlowDirection="RightToLeft" FontFamily="Segoe UI"
+        Background="{StaticResource Surface}" Icon="/app.ico" ShowInTaskbar="False">
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="16,10">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="שמור" Style="{StaticResource PrimaryButton}" MinWidth="90" IsDefault="True" Click="BtnSave_Click"/>
+                <Button Content="ביטול" MinWidth="90" Margin="8,0,0,0" IsCancel="True"/>
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="20,4,20,16">
+                <TextBlock Text="התראות" Style="{StaticResource SectionTitle}"/>
+                <CheckBox x:Name="ChkNotifications" Margin="0,2">
+                    <TextBlock TextWrapping="Wrap" Text="התראה קופצת כשמגיעה הודעה או קובץ והחלון לא פתוח מולך"/>
+                </CheckBox>
+                <CheckBox x:Name="ChkTray" Margin="0,8,0,2">
+                    <TextBlock TextWrapping="Wrap" Text="סגירת החלון משאירה את BT Chat פועל ברקע (אייקון ליד השעון), כדי לקבל הודעות וחיבורים"/>
+                </CheckBox>
+
+                <TextBlock Text="תיקייה לקבצים שמתקבלים" Style="{StaticResource SectionTitle}"/>
+                <TextBox x:Name="TxtFolder" Style="{StaticResource FieldBox}" IsReadOnly="True" FlowDirection="LeftToRight"/>
+                <WrapPanel Margin="0,8,0,0">
+                    <Button Content="שנה..." Click="BtnChangeFolder_Click" Margin="0,0,8,6"/>
+                    <Button Content="ברירת מחדל (הורדות)" Click="BtnDefaultFolder_Click" Margin="0,0,8,6"/>
+                    <Button Content="פתח את התיקייה" Click="BtnOpenFolder_Click" Margin="0,0,8,6"/>
+                </WrapPanel>
+
+                <TextBlock Text="איכות תמונות בשליחה" Style="{StaticResource SectionTitle}"/>
+                <ComboBox x:Name="CmbQuality" Padding="8,6" HorizontalAlignment="Left" MinWidth="240">
+                    <ComboBoxItem Content="שאל בכל שליחה" Tag="ask"/>
+                    <ComboBoxItem Content="תמיד איכות מוקטנת (מהיר)" Tag="reduced"/>
+                    <ComboBoxItem Content="תמיד איכות מקורית" Tag="original"/>
+                </ComboBox>
+
+                <TextBlock Text="מכשירים שמאושרים תמיד" Style="{StaticResource SectionTitle}"/>
+                <TextBlock Text="מכשירים אלה מתחברים בלי לשאול. כל מכשיר אחר דורש אישור."
+                           Foreground="{StaticResource TextSub}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                <ListBox x:Name="ListTrusted" Height="110" BorderBrush="{StaticResource Line}" DisplayMemberPath="Label"/>
+                <Button Content="הסר מהרשימה" HorizontalAlignment="Left" Margin="0,8,0,0" Click="BtnRemoveTrusted_Click"/>
+
+                <TextBlock x:Name="TxtVersion" Margin="0,20,0,0" Foreground="{StaticResource TextSub}" FontSize="11"/>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

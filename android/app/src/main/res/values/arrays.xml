@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="quality_entries">
+        <item>שאל בכל שליחה</item>
+        <item>תמיד איכות מוקטנת (מהיר)</item>
+        <item>תמיד איכות מקורית</item>
+    </string-array>
+    <string-array name="quality_values">
+        <item>ask</item>
+        <item>reduced</item>
+        <item>original</item>
+    </string-array>
+</resources>

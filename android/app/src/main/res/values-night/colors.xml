@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand">#2F7BEA</color>
+    <color name="brand_dark">#0F2F63</color>
+    <color name="toolbar_subtitle">#C7D9FA</color>
+
+    <color name="surface">#1B1E22</color>
+    <color name="chat_bg">#121417</color>
+    <color name="bubble_out">#1F3B66</color>
+    <color name="bubble_in">#262A2F</color>
+    <color name="file_icon_bg">#22324A</color>
+    <color name="input_bg">#262A2F</color>
+
+    <color name="text_primary">#E7E9EC</color>
+    <color name="text_secondary">#A0A5AB</color>
+
+    <color name="banner_ok">#173322</color>
+    <color name="banner_neutral">#1C2533</color>
+    <color name="banner_warn">#3A2D14</color>
+</resources>

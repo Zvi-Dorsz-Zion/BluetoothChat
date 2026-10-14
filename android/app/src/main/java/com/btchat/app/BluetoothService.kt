@@ -5,115 +5,302 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.EOFException
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.Executors
 
 /**
- * Wraps a single Bluetooth RFCOMM connection. Can act as SERVER (listen) or
- * CLIENT (connect to a paired device). Same class is used for both roles.
+ * Owns the single Bluetooth RFCOMM connection. Listens for incoming connections
+ * (server) or connects to a paired device (client). All callbacks arrive on
+ * background threads - the listener is responsible for moving to the UI thread.
+ *
+ * Handshake: after the socket opens, the server side must call [approve] or
+ * [reject]. The client waits for that answer (TYPE_ACCEPT / TYPE_REJECT).
  */
+@SuppressLint("MissingPermission")
 class BluetoothService(
     private val adapter: BluetoothAdapter,
     private val listener: Listener
 ) {
     interface Listener {
-        fun onConnected(deviceName: String)
-        fun onDisconnected()
+        fun onListenFailed(message: String)
+        fun onIncomingRequest(device: BluetoothDevice)
+        fun onAwaitingApproval(device: BluetoothDevice)
+        fun onConnected(device: BluetoothDevice)
+        fun onConnectFailed(device: BluetoothDevice, message: String)
+        fun onRejected(device: BluetoothDevice)
+        fun onDisconnected(device: BluetoothDevice)
         fun onTextReceived(text: String)
-        fun onFileReceived(fileName: String, bytes: ByteArray)
-        fun onError(message: String)
+        /** Called on the reader thread. Return null to drop the file. */
+        fun onFileIncoming(fileName: String, size: Long): IncomingFile?
     }
 
-    private val executor = Executors.newCachedThreadPool()
-    @Volatile private var socket: BluetoothSocket? = null
+    interface IncomingFile {
+        val output: OutputStream
+        fun onProgress(received: Long)
+        fun onFinished(success: Boolean)
+    }
+
+    private val io = Executors.newCachedThreadPool()
+    private val sender = Executors.newSingleThreadExecutor()
+
+    @Volatile private var wantListen = false
     @Volatile private var serverSocket: BluetoothServerSocket? = null
-    @Volatile private var running = false
+    @Volatile private var socket: BluetoothSocket? = null
+    @Volatile private var output: DataOutputStream? = null
 
-    @SuppressLint("MissingPermission")
-    fun startServer() {
-        stop()
-        running = true
-        executor.execute {
-            try {
-                serverSocket = adapter.listenUsingRfcommWithServiceRecord(
-                    "BtChatServer", BtProtocol.SPP_UUID
-                )
-                val accepted = serverSocket?.accept() // blocks until a client connects
-                serverSocket?.close()
-                if (accepted != null) attach(accepted)
-            } catch (e: IOException) {
-                if (running) listener.onError("שגיאת שרת: ${e.message}")
+    val hasConnection: Boolean get() = socket != null
+
+    // ---- Server ----
+
+    fun startListening() {
+        synchronized(this) {
+            if (wantListen || socket != null) return
+            wantListen = true
+        }
+        io.execute {
+            val ss = try {
+                adapter.listenUsingRfcommWithServiceRecord("BtChat", BtProtocol.SPP_UUID)
+            } catch (e: Exception) {
+                wantListen = false
+                listener.onListenFailed(e.message ?: "")
+                return@execute
             }
+            serverSocket = ss
+            if (!wantListen) {
+                closeQuietly(ss)
+                return@execute
+            }
+            val accepted = try { ss.accept() } catch (e: IOException) { null }
+            val stoppedOnPurpose = !wantListen
+            wantListen = false
+            serverSocket = null
+            closeQuietly(ss)
+            if (accepted == null) {
+                if (!stoppedOnPurpose) listener.onListenFailed("ההאזנה הופסקה")
+                return@execute
+            }
+            synchronized(this) {
+                if (socket != null) {
+                    closeQuietly(accepted)
+                    return@execute
+                }
+                attach(accepted)
+            }
+            listener.onIncomingRequest(accepted.remoteDevice)
+            readLoop(accepted)
         }
     }
 
-    @SuppressLint("MissingPermission")
-    fun connectToDevice(device: BluetoothDevice) {
-        stop()
-        running = true
-        executor.execute {
+    fun stopListening() {
+        wantListen = false
+        serverSocket?.let { closeQuietly(it) }
+        serverSocket = null
+    }
+
+    fun approve() = sendControl(BtProtocol.TYPE_ACCEPT)
+
+    fun reject() {
+        sender.execute {
             try {
-                val s = device.createRfcommSocketToServiceRecord(BtProtocol.SPP_UUID)
+                output?.let { BtProtocol.writeControl(it, BtProtocol.TYPE_REJECT) }
+                Thread.sleep(500) // let the answer reach the other side before closing
+            } catch (_: Exception) {
+            }
+            disconnect()
+        }
+    }
+
+    // ---- Client ----
+
+    fun connect(device: BluetoothDevice) {
+        stopListening()
+        io.execute {
+            val s = try {
+                device.createRfcommSocketToServiceRecord(BtProtocol.SPP_UUID)
+            } catch (e: IOException) {
+                listener.onConnectFailed(device, e.message ?: "")
+                return@execute
+            }
+            synchronized(this) { socket = s } // lets disconnect() abort a pending connect
+            try {
                 adapter.cancelDiscovery()
-                s.connect() // blocks until connected or throws
-                attach(s)
+                s.connect()
             } catch (e: IOException) {
-                if (running) listener.onError("שגיאת חיבור: ${e.message}")
+                synchronized(this) { if (socket === s) socket = null }
+                closeQuietly(s)
+                listener.onConnectFailed(device, e.message ?: "")
+                return@execute
             }
+            synchronized(this) {
+                if (socket !== s) { // cancelled while connecting
+                    closeQuietly(s)
+                    listener.onConnectFailed(device, "בוטל")
+                    return@execute
+                }
+                attach(s)
+            }
+            listener.onAwaitingApproval(device)
+            readLoop(s)
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun attach(connected: BluetoothSocket) {
-        socket = connected
-        listener.onConnected(connected.remoteDevice?.name ?: "מכשיר לא ידוע")
-        readLoop(connected)
+    // ---- Shared ----
+
+    private fun attach(s: BluetoothSocket) {
+        socket = s
+        output = DataOutputStream(BufferedOutputStream(s.outputStream, BtProtocol.CHUNK))
     }
 
-    private fun readLoop(connected: BluetoothSocket) {
-        val input = connected.inputStream
+    private fun readLoop(s: BluetoothSocket) {
+        val device = s.remoteDevice
         try {
-            while (running) {
-                when (val msg = BtProtocol.readNextMessage(input)) {
-                    is BtProtocol.Message.Text -> listener.onTextReceived(msg.text)
-                    is BtProtocol.Message.FileReceived ->
-                        listener.onFileReceived(msg.fileName, msg.bytes)
+            val input = DataInputStream(BufferedInputStream(s.inputStream, BtProtocol.CHUNK))
+            loop@ while (true) {
+                val type = input.readUnsignedByte()
+                val length = input.readInt()
+                when (type) {
+                    BtProtocol.TYPE_TEXT -> {
+                        val bytes = ByteArray(length)
+                        input.readFully(bytes)
+                        listener.onTextReceived(String(bytes, Charsets.UTF_8))
+                    }
+                    BtProtocol.TYPE_FILE -> receiveFile(input, length)
+                    BtProtocol.TYPE_ACCEPT -> listener.onConnected(device)
+                    BtProtocol.TYPE_REJECT -> {
+                        listener.onRejected(device)
+                        break@loop
+                    }
+                    else -> BtProtocol.skipFully(input, length.toLong())
                 }
             }
-        } catch (e: IOException) {
-            if (running) listener.onError("החיבור נותק: ${e.message}")
+        } catch (_: IOException) {
+            // connection closed
         } finally {
-            listener.onDisconnected()
+            synchronized(this) {
+                if (socket === s) {
+                    socket = null
+                    output = null
+                }
+            }
+            closeQuietly(s)
+            listener.onDisconnected(device)
         }
     }
 
-    fun sendText(text: String) {
-        val s = socket ?: run { listener.onError("אין חיבור פעיל"); return }
-        executor.execute {
+    private fun receiveFile(input: DataInputStream, length: Int) {
+        val nameLen = input.readUnsignedShort()
+        val nameBytes = ByteArray(nameLen)
+        input.readFully(nameBytes)
+        val size = length.toLong() - 2 - nameLen
+        val target = try {
+            listener.onFileIncoming(String(nameBytes, Charsets.UTF_8), size)
+        } catch (_: Exception) {
+            null
+        }
+        val buffer = ByteArray(BtProtocol.CHUNK)
+        var received = 0L
+        var writeOk = target != null
+        try {
+            while (received < size) {
+                val n = input.read(buffer, 0, minOf(buffer.size.toLong(), size - received).toInt())
+                if (n < 0) throw EOFException()
+                if (writeOk) {
+                    try {
+                        target!!.output.write(buffer, 0, n)
+                    } catch (_: IOException) {
+                        writeOk = false // keep draining so the stream stays in sync
+                    }
+                }
+                received += n
+                target?.onProgress(received)
+            }
+        } catch (e: IOException) {
+            target?.let { closeQuietly(it.output); it.onFinished(false) }
+            throw e
+        }
+        if (target != null) {
             try {
-                BtProtocol.sendText(s.outputStream, text)
-            } catch (e: IOException) {
-                listener.onError("שגיאה בשליחה: ${e.message}")
+                target.output.close()
+            } catch (_: IOException) {
+                writeOk = false
+            }
+            target.onFinished(writeOk)
+        }
+    }
+
+    private fun sendControl(type: Int) {
+        sender.execute {
+            try {
+                output?.let { BtProtocol.writeControl(it, type) }
+            } catch (_: IOException) {
             }
         }
     }
 
-    fun sendFile(fileName: String, bytes: ByteArray) {
-        val s = socket ?: run { listener.onError("אין חיבור פעיל"); return }
-        executor.execute {
-            try {
-                BtProtocol.sendFile(s.outputStream, fileName, bytes)
-            } catch (e: IOException) {
-                listener.onError("שגיאה בשליחת קובץ: ${e.message}")
+    fun sendText(text: String, done: (Boolean) -> Unit) {
+        sender.execute {
+            val out = output
+            val ok = try {
+                if (out == null) false else {
+                    BtProtocol.writeText(out, text)
+                    true
+                }
+            } catch (_: IOException) {
+                false
             }
+            done(ok)
         }
     }
 
-    fun stop() {
-        running = false
-        try { serverSocket?.close() } catch (_: IOException) {}
-        try { socket?.close() } catch (_: IOException) {}
-        socket = null
-        serverSocket = null
+    fun sendFile(
+        fileName: String,
+        size: Long,
+        open: () -> InputStream,
+        progress: (Long) -> Unit,
+        done: (Boolean) -> Unit
+    ) {
+        sender.execute {
+            val out = output
+            val input = try { if (out == null) null else open() } catch (_: Exception) { null }
+            if (out == null || input == null) {
+                done(false)
+                return@execute
+            }
+            val ok = try {
+                input.use { BtProtocol.writeFile(out, fileName, size, it, progress) }
+                true
+            } catch (_: Exception) {
+                // A half-written frame corrupts the stream - drop the connection.
+                disconnect()
+                false
+            }
+            done(ok)
+        }
+    }
+
+    fun disconnect() {
+        val s: BluetoothSocket?
+        synchronized(this) {
+            s = socket
+            socket = null
+            output = null
+        }
+        s?.let { closeQuietly(it) }
+    }
+
+    fun shutdown() {
+        stopListening()
+        disconnect()
+    }
+
+    private fun closeQuietly(c: java.io.Closeable) {
+        try { c.close() } catch (_: IOException) { }
     }
 }

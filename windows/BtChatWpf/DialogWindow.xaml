@@ -1,0 +1,17 @@
+<Window x:Class="BtChatWpf.DialogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="BT Chat" Width="440" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" FlowDirection="RightToLeft"
+        FontFamily="Segoe UI" Background="{StaticResource Surface}"
+        Icon="/app.ico" ShowInTaskbar="False">
+    <StackPanel Margin="22,18,22,16">
+        <TextBlock x:Name="TxtTitle" FontSize="17" FontWeight="SemiBold"
+                   Foreground="{StaticResource TextMain}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+        <TextBlock x:Name="TxtMessage" FontSize="14" TextWrapping="Wrap"
+                   Foreground="{StaticResource TextMain}" Margin="0,0,0,14"/>
+        <TextBox x:Name="Input" Style="{StaticResource FieldBox}" Visibility="Collapsed" Margin="0,0,0,14"/>
+        <CheckBox x:Name="Check" Visibility="Collapsed" Margin="0,0,0,14" FontSize="13"/>
+        <WrapPanel x:Name="ButtonsPanel" HorizontalAlignment="Right"/>
+    </StackPanel>
+</Window>
