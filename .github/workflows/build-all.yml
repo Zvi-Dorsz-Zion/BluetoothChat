@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
+env:
+  APP_VERSION: "2.1"
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -60,3 +63,35 @@ jobs:
         with:
           name: BtChat-windows-exe
           path: windows/BtChatWpf/publish/BtChat.exe
+
+  # Collects both builds into a DRAFT release (Releases page). Nothing is published
+  # until you open the draft and press "Publish release".
+  draft-release:
+    needs: [ build-android, build-windows ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Name files by version
+        run: |
+          VERSION="${APP_VERSION}.${GITHUB_RUN_NUMBER}"
+          mv dist/app-release.apk "dist/BtChat-${VERSION}.apk"
+          mv dist/BtChat.exe "dist/BtChat-${VERSION}.exe"
+          ls -l dist
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: v${{ env.APP_VERSION }}.${{ github.run_number }}
+          name: BT Chat ${{ env.APP_VERSION }}.${{ github.run_number }}
+          body: |
+            - **Android**: `BtChat-${{ env.APP_VERSION }}.${{ github.run_number }}.apk` (מתקין מעל הגרסה הקודמת)
+            - **Windows**: `BtChat-${{ env.APP_VERSION }}.${{ github.run_number }}.exe`
+          files: dist/*
