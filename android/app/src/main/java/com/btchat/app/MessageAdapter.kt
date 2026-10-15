@@ -78,7 +78,7 @@ class MessageAdapter(
     private fun bindStatus(b: ItemMessageBinding, m: ChatMessage) {
         val pending = m.status == MsgStatus.PENDING
         if (m.kind == MsgKind.FILE) {
-            val size = formatSize(m.fileSize)
+            val size = formatSize(m.fileSize) + if (m.viaWifi) " · Wi-Fi ⚡" else ""
             b.fileInfo.text = when {
                 pending -> "$size · ${m.progress}%"
                 m.status == MsgStatus.FAILED -> "$size · נכשל"

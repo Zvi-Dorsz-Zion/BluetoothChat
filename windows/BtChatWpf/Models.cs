@@ -54,6 +54,19 @@ public sealed class ChatMessage : Notifier
         }
     }
 
+    private bool _viaWifi;
+    /// The file went over the fast Wi-Fi path instead of Bluetooth.
+    public bool ViaWifi
+    {
+        get => _viaWifi;
+        set
+        {
+            _viaWifi = value;
+            OnChanged();
+            OnChanged(nameof(FileInfoText));
+        }
+    }
+
     public bool IsText => Kind == MsgKind.Text;
     public bool IsFile => Kind == MsgKind.File;
     public bool IsInProgress => Kind == MsgKind.File && Status == MsgStatus.Pending;
@@ -77,7 +90,7 @@ public sealed class ChatMessage : Notifier
     {
         get
         {
-            string size = FormatSize(FileSize);
+            string size = FormatSize(FileSize) + (ViaWifi ? " · Wi-Fi ⚡" : "");
             return Status switch
             {
                 MsgStatus.Pending => $"{size} · {(int)Progress}%",
@@ -140,7 +153,7 @@ public sealed class ChatMessage : Notifier
     };
 
     public HistoryRecord ToRecord() => new(
-        Time, Outgoing, Kind.ToString(), Text, FileName, FilePath, FileSize, Status != MsgStatus.Failed);
+        Time, Outgoing, Kind.ToString(), Text, FileName, FilePath, FileSize, Status != MsgStatus.Failed, ViaWifi);
 
     public static ChatMessage FromRecord(HistoryRecord r) => new()
     {
@@ -151,7 +164,8 @@ public sealed class ChatMessage : Notifier
         FileName = r.FileName,
         FilePath = r.FilePath,
         FileSize = r.Size,
-        Status = r.Ok ? MsgStatus.Done : MsgStatus.Failed
+        Status = r.Ok ? MsgStatus.Done : MsgStatus.Failed,
+        ViaWifi = r.Wifi
     };
 }
 

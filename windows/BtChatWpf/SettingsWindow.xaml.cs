@@ -25,6 +25,7 @@ public partial class SettingsWindow : Window
 
         ChkNotifications.IsChecked = settings.Notifications;
         ChkTray.IsChecked = settings.CloseToTray;
+        ChkWifi.IsChecked = settings.WifiEnabled;
         _folder = settings.SaveFolder;
         ShowFolder();
 
@@ -78,6 +79,7 @@ public partial class SettingsWindow : Window
     {
         _settings.Notifications = ChkNotifications.IsChecked == true;
         _settings.CloseToTray = ChkTray.IsChecked == true;
+        _settings.WifiEnabled = ChkWifi.IsChecked == true;
         _settings.SaveFolder = _folder;
         _settings.ImageQuality = (CmbQuality.SelectedItem as ComboBoxItem)?.Tag as string ?? "ask";
         _settings.Trusted = _trusted.Select(t => t.Key).ToList();

@@ -18,7 +18,9 @@ class ChatMessage(
     /** Human readable place where a received file was saved, e.g. "הורדות/BT Chat/a.jpg". */
     val location: String? = null,
     var status: MsgStatus = MsgStatus.DONE,
-    var progress: Int = 0
+    var progress: Int = 0,
+    /** The file went over the fast Wi-Fi path instead of Bluetooth. */
+    var viaWifi: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -31,6 +33,7 @@ class ChatMessage(
         fileName?.let { put("name", it) }
         fileUri?.let { put("uri", it) }
         location?.let { put("loc", it) }
+        if (viaWifi) put("wifi", true)
     }
 
     companion object {
@@ -44,7 +47,8 @@ class ChatMessage(
             fileUri = o.strOrNull("uri"),
             fileSize = o.optLong("size"),
             location = o.strOrNull("loc"),
-            status = runCatching { MsgStatus.valueOf(o.optString("status")) }.getOrDefault(MsgStatus.DONE)
+            status = runCatching { MsgStatus.valueOf(o.optString("status")) }.getOrDefault(MsgStatus.DONE),
+            viaWifi = o.optBoolean("wifi", false)
         )
 
         private fun JSONObject.strOrNull(key: String): String? = if (has(key)) getString(key) else null

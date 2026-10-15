@@ -12,6 +12,7 @@
         android:layout_height="?attr/actionBarSize"
         android:background="@color/brand"
         android:theme="@style/ThemeOverlay.Material3.Dark.ActionBar"
+        app:popupTheme="@style/ThemeOverlay.BtChat.Popup"
         app:subtitleTextColor="@color/toolbar_subtitle"
         app:titleTextColor="@android:color/white" />
 

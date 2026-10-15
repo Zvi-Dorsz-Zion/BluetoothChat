@@ -16,6 +16,10 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_SAVE_TREE, null)
         set(value) = sp.edit().putString(KEY_SAVE_TREE, value).apply()
 
+    /** Send / receive big files over the local Wi-Fi network when both devices are on it. */
+    val wifiEnabled: Boolean
+        get() = sp.getBoolean(KEY_WIFI, true)
+
     /** "ask", "reduced" or "original". */
     val imageQuality: String
         get() = sp.getString(KEY_IMAGE_QUALITY, "ask") ?: "ask"
@@ -43,6 +47,7 @@ class Prefs(context: Context) {
 
     companion object {
         const val KEY_NOTIFICATIONS = "notifications"
+        const val KEY_WIFI = "wifi_transfer"
         const val KEY_SAVE_TREE = "save_tree_uri"
         const val KEY_IMAGE_QUALITY = "image_quality"
         const val KEY_LAST_ADDRESS = "last_address"

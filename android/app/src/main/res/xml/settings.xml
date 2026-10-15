@@ -24,6 +24,16 @@
             app:key="save_folder_reset"
             app:summary="הורדות/BT Chat"
             app:title="חזור לתיקיית ברירת המחדל" />
+        <SwitchPreferenceCompat
+            app:defaultValue="true"
+            app:iconSpaceReserved="false"
+            app:key="wifi_transfer"
+            app:summary="קבצים מעל 1MB עוברים ברשת Wi-Fi המשותפת (או נקודה חמה) - מהיר בהרבה. אם אין רשת משותפת, עוברים ב-Bluetooth כרגיל."
+            app:title="העברה מהירה ב-Wi-Fi" />
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="temp_files"
+            app:title="ניקוי קבצים זמניים" />
         <ListPreference
             app:defaultValue="ask"
             app:entries="@array/quality_entries"

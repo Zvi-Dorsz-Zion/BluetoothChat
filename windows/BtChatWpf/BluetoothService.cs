@@ -37,11 +37,17 @@ public sealed class BluetoothService
     public event Action<PeerInfo>? Disconnected;
     public event Action<string>? TextReceived;
 
-    /// Called on the reader thread for each incoming file. Return null to drop it.
-    public Func<string, long, IIncomingFile?>? FileIncoming;
+    /// Called on a background thread for each incoming file (name, size, viaWifi). Return null to drop it.
+    public Func<string, long, bool, IIncomingFile?>? FileIncoming;
+
+    /// Whether big files may go over the local Wi-Fi network.
+    public Func<bool> WifiEnabled = () => true;
 
     private readonly object _gate = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _fileLock = new(1, 1);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, TaskCompletionSource<(byte Type, System.Text.Json.Nodes.JsonObject Json)>> _wifiAnswers = new();
+    private long _offerIds = DateTime.UtcNow.Ticks;
     private bool _wantListen;
     private BluetoothListener? _listener;
     private BluetoothClient? _connecting;
@@ -244,6 +250,16 @@ public sealed class BluetoothService
                     case BtProtocol.TypeReject:
                         Rejected?.Invoke(peer);
                         return;
+                    case BtProtocol.TypeWifiOffer:
+                        var offer = BtProtocol.ReadJson(input, length);
+                        _ = Task.Run(async () => { try { await ReceiveWifiOfferAsync(offer); } catch { } });
+                        break;
+                    case BtProtocol.TypeWifiPull:
+                    case BtProtocol.TypeWifiDecline:
+                        var answer = BtProtocol.ReadJson(input, length);
+                        long answerId = (long?)answer["id"] ?? 0;
+                        if (_wifiAnswers.TryGetValue(answerId, out var waiting)) waiting.TrySetResult((type, answer));
+                        break;
                     default:
                         BtProtocol.Skip(input, length);
                         break;
@@ -276,7 +292,7 @@ public sealed class BluetoothService
         long size = (long)length - 2 - nameLength;
 
         IIncomingFile? target = null;
-        try { target = FileIncoming?.Invoke(name, size); } catch { }
+        try { target = FileIncoming?.Invoke(name, size, false); } catch { }
 
         var buffer = new byte[BtProtocol.Chunk];
         long received = 0;
@@ -338,7 +354,30 @@ public sealed class BluetoothService
         finally { _writeLock.Release(); }
     });
 
-    public Task<bool> SendFileAsync(string path, string fileName, Action<long> progress) => Task.Run(async () =>
+    /// Sends a file: over Wi-Fi when possible (big files), otherwise over Bluetooth.
+    /// <paramref name="onWifi"/> is called once the Wi-Fi connection is up and data starts flowing.
+    public Task<bool> SendFileAsync(string path, string fileName, Action<long> progress, Action? onWifi = null) => Task.Run(async () =>
+    {
+        await _fileLock.WaitAsync(); // one file at a time; text keeps flowing during Wi-Fi transfers
+        try
+        {
+            long size;
+            try { size = new FileInfo(path).Length; }
+            catch { return false; }
+            if (_stream == null) return false;
+
+            if (size >= WifiTransfer.MinSize && WifiEnabled())
+            {
+                bool? viaWifi = null;
+                try { viaWifi = await SendViaWifiAsync(path, fileName, size, progress, onWifi); } catch { }
+                if (viaWifi.HasValue) return viaWifi.Value;
+            }
+            return await SendViaBluetoothAsync(path, fileName, progress);
+        }
+        finally { _fileLock.Release(); }
+    });
+
+    private async Task<bool> SendViaBluetoothAsync(string path, string fileName, Action<long> progress)
     {
         FileStream file;
         try { file = File.OpenRead(path); }
@@ -364,7 +403,115 @@ public sealed class BluetoothService
             }
         }
         finally { _writeLock.Release(); }
-    });
+    }
+
+    /// Windows never hosts as the sender (avoids the firewall prompt): it asks the
+    /// receiver to host (offer without address) and connects to it.
+    /// Returns null if no Wi-Fi link could be set up (caller falls back to Bluetooth).
+    private async Task<bool?> SendViaWifiAsync(string path, string fileName, long size, Action<long> progress, Action? onWifi)
+    {
+        long id = Interlocked.Increment(ref _offerIds);
+        var answer = new TaskCompletionSource<(byte Type, System.Text.Json.Nodes.JsonObject Json)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _wifiAnswers[id] = answer;
+        try
+        {
+            var offer = new System.Text.Json.Nodes.JsonObject { ["id"] = id, ["name"] = fileName, ["size"] = size };
+            if (!await WriteJsonAsync(BtProtocol.TypeWifiOffer, offer)) return null;
+
+            var first = await Task.WhenAny(answer.Task, Task.Delay(20_000));
+            if (first != answer.Task) return null;
+            var (type, json) = answer.Task.Result;
+            if (type != BtProtocol.TypeWifiPull) return null;
+
+            var ips = (json["ips"] as System.Text.Json.Nodes.JsonArray)?.Select(n => (string?)n ?? "").ToList()
+                      ?? new List<string>();
+            using var client = await WifiTransfer.ConnectAnyAsync(ips, (int?)json["port"] ?? 0,
+                WifiTransfer.FromHex((string?)json["token"]));
+            if (client == null)
+            {
+                await WriteJsonAsync(BtProtocol.TypeWifiDecline, new System.Text.Json.Nodes.JsonObject { ["id"] = id });
+                return null;
+            }
+            onWifi?.Invoke();
+            try
+            {
+                using var file = File.OpenRead(path);
+                return WifiTransfer.Push(client, file, size, progress);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        finally
+        {
+            _wifiAnswers.TryRemove(id, out _);
+        }
+    }
+
+    /// Receiver side of a Wi-Fi offer: connect to the sender, or host and ask it to connect to us.
+    private async Task ReceiveWifiOfferAsync(System.Text.Json.Nodes.JsonObject offer)
+    {
+        long id = (long?)offer["id"] ?? 0;
+        string name = (string?)offer["name"] ?? "file";
+        long size = (long?)offer["size"] ?? 0;
+        var decline = new System.Text.Json.Nodes.JsonObject { ["id"] = id };
+        if (!WifiEnabled() || size <= 0)
+        {
+            await WriteJsonAsync(BtProtocol.TypeWifiDecline, decline);
+            return;
+        }
+
+        var ips = (offer["ips"] as System.Text.Json.Nodes.JsonArray)?.Select(n => (string?)n ?? "").ToList()
+                  ?? new List<string>();
+        TcpClient? client = null;
+        if (ips.Count > 0)
+            client = await WifiTransfer.ConnectAnyAsync(ips, (int?)offer["port"] ?? 0, WifiTransfer.FromHex((string?)offer["token"]));
+
+        if (client == null)
+        {
+            try
+            {
+                using var host = new WifiTransfer.Host();
+                var pull = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = id,
+                    ["port"] = host.Port,
+                    ["ips"] = new System.Text.Json.Nodes.JsonArray(WifiTransfer.LocalIpv4().Select(ip => (System.Text.Json.Nodes.JsonNode?)ip).ToArray()),
+                    ["token"] = WifiTransfer.ToHex(host.Token)
+                };
+                if (await WriteJsonAsync(BtProtocol.TypeWifiPull, pull)) client = await host.AcceptAsync(8000);
+            }
+            catch { client = null; }
+        }
+
+        if (client == null)
+        {
+            await WriteJsonAsync(BtProtocol.TypeWifiDecline, decline);
+            return;
+        }
+        using (client)
+        {
+            IIncomingFile? target = null;
+            try { target = FileIncoming?.Invoke(name, size, true); } catch { }
+            if (target != null) WifiTransfer.Pull(client, size, target);
+        }
+    }
+
+    private async Task<bool> WriteJsonAsync(byte type, System.Text.Json.Nodes.JsonObject json)
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            var s = _stream;
+            if (s == null) return false;
+            BtProtocol.WriteJson(s, type, json);
+            return true;
+        }
+        catch { return false; }
+        finally { _writeLock.Release(); }
+    }
 
     public void Disconnect()
     {

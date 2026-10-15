@@ -46,6 +46,7 @@ public partial class MainWindow : Window
         ListMessages.ItemsSource = _messages;
         SetupTray();
         WireBluetooth();
+        _bt.WifiEnabled = () => _settings.WifiEnabled;
         _retryListen.Tick += (_, _) => { _retryListen.Stop(); StartListening(); };
 
         Loaded += (_, _) =>
@@ -219,7 +220,7 @@ public partial class MainWindow : Window
             RefreshDeviceSubtitle(key);
         });
 
-        _bt.FileIncoming = (name, size) =>
+        _bt.FileIncoming = (name, size, viaWifi) =>
         {
             string? key = null;
             Dispatcher.Invoke(() => key = _peer?.Key);
@@ -243,7 +244,7 @@ public partial class MainWindow : Window
             var msg = new ChatMessage
             {
                 Outgoing = false, Kind = MsgKind.File, FileName = Path.GetFileName(path),
-                FilePath = path, FileSize = size, Status = MsgStatus.Pending
+                FilePath = path, FileSize = size, Status = MsgStatus.Pending, ViaWifi = viaWifi
             };
             Ui(() => Show(key, msg));
             return new IncomingFile(stream, size,
@@ -740,7 +741,11 @@ public partial class MainWindow : Window
                 if (p == last) return;
                 last = p;
                 Ui(() => msg.Progress = p);
-            });
+            }, onWifi: () => Ui(() => msg.ViaWifi = true));
+            if (sendPath != path) // reduced copy in %TEMP% is not needed anymore
+            {
+                try { Directory.Delete(Path.GetDirectoryName(sendPath)!, true); } catch { }
+            }
             msg.Status = ok ? MsgStatus.Done : MsgStatus.Failed;
             msg.RefreshThumbnail();
             _history.Append(key, msg);

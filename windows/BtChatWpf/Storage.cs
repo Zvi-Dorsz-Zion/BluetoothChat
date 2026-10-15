@@ -44,6 +44,7 @@ public sealed class AppSettings
 {
     public bool Notifications { get; set; } = true;
     public bool CloseToTray { get; set; } = true;
+    public bool WifiEnabled { get; set; } = true;
     public string? SaveFolder { get; set; }
     /// "ask", "reduced" or "original"
     public string ImageQuality { get; set; } = "ask";
@@ -81,7 +82,8 @@ public sealed class AppSettings
 }
 
 public sealed record HistoryRecord(
-    DateTime Time, bool Out, string Kind, string? Text, string? FileName, string? FilePath, long Size, bool Ok);
+    DateTime Time, bool Out, string Kind, string? Text, string? FileName, string? FilePath, long Size, bool Ok,
+    bool Wifi = false);
 
 /// Chat history per device: one JSON-lines file per device key.
 public sealed class HistoryStore

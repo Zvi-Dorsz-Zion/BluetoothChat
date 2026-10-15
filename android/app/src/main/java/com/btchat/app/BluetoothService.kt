@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import android.content.Context
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -13,7 +14,14 @@ import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Owns the single Bluetooth RFCOMM connection. Listens for incoming connections
@@ -22,11 +30,16 @@ import java.util.concurrent.Executors
  *
  * Handshake: after the socket opens, the server side must call [approve] or
  * [reject]. The client waits for that answer (TYPE_ACCEPT / TYPE_REJECT).
+ *
+ * Files of [WifiTransfer.MIN_SIZE] or more are first offered over Wi-Fi
+ * (TYPE_WIFI_OFFER / PULL / DECLINE); if that can't be set up they go over Bluetooth.
  */
 @SuppressLint("MissingPermission")
 class BluetoothService(
+    private val context: Context,
     private val adapter: BluetoothAdapter,
-    private val listener: Listener
+    private val listener: Listener,
+    private val wifiEnabled: () -> Boolean
 ) {
     interface Listener {
         fun onListenFailed(message: String)
@@ -37,8 +50,8 @@ class BluetoothService(
         fun onRejected(device: BluetoothDevice)
         fun onDisconnected(device: BluetoothDevice)
         fun onTextReceived(text: String)
-        /** Called on the reader thread. Return null to drop the file. */
-        fun onFileIncoming(fileName: String, size: Long): IncomingFile?
+        /** Called on a background thread. Return null to drop the file. */
+        fun onFileIncoming(fileName: String, size: Long, viaWifi: Boolean): IncomingFile?
     }
 
     interface IncomingFile {
@@ -48,7 +61,13 @@ class BluetoothService(
     }
 
     private val io = Executors.newCachedThreadPool()
+    /** Serializes writes to the Bluetooth socket. */
     private val sender = Executors.newSingleThreadExecutor()
+    /** One outgoing file at a time; text keeps flowing on [sender] meanwhile when Wi-Fi is used. */
+    private val fileJobs = Executors.newSingleThreadExecutor()
+    /** Answers (PULL / DECLINE) to our Wi-Fi offers, by offer id. */
+    private val wifiAnswers = ConcurrentHashMap<Long, LinkedBlockingQueue<Any>>()
+    private val offerIds = AtomicLong(System.currentTimeMillis())
 
     @Volatile private var wantListen = false
     @Volatile private var serverSocket: BluetoothServerSocket? = null
@@ -177,6 +196,14 @@ class BluetoothService(
                         listener.onRejected(device)
                         break@loop
                     }
+                    BtProtocol.TYPE_WIFI_OFFER -> {
+                        val offer = BtProtocol.readJson(input, length)
+                        io.execute { runCatching { receiveWifiOffer(offer) } }
+                    }
+                    BtProtocol.TYPE_WIFI_PULL, BtProtocol.TYPE_WIFI_DECLINE -> {
+                        val answer = BtProtocol.readJson(input, length)
+                        wifiAnswers[answer.optLong("id")]?.offer(type to answer)
+                    }
                     else -> BtProtocol.skipFully(input, length.toLong())
                 }
             }
@@ -200,7 +227,7 @@ class BluetoothService(
         input.readFully(nameBytes)
         val size = length.toLong() - 2 - nameLen
         val target = try {
-            listener.onFileIncoming(String(nameBytes, Charsets.UTF_8), size)
+            listener.onFileIncoming(String(nameBytes, Charsets.UTF_8), size, false)
         } catch (_: Exception) {
             null
         }
@@ -259,30 +286,159 @@ class BluetoothService(
         }
     }
 
+    /**
+     * Sends a file: over Wi-Fi when possible (big files), otherwise over Bluetooth.
+     * [onWifi] is called once the Wi-Fi connection is up and data starts flowing.
+     */
     fun sendFile(
         fileName: String,
         size: Long,
         open: () -> InputStream,
         progress: (Long) -> Unit,
+        onWifi: () -> Unit,
         done: (Boolean) -> Unit
     ) {
-        sender.execute {
-            val out = output
-            val input = try { if (out == null) null else open() } catch (_: Exception) { null }
-            if (out == null || input == null) {
+        fileJobs.execute {
+            if (output == null) {
                 done(false)
                 return@execute
             }
+            if (size >= WifiTransfer.MIN_SIZE && wifiEnabled()) {
+                val result = try { sendViaWifi(fileName, size, open, progress, onWifi) } catch (_: Exception) { null }
+                if (result != null) {
+                    done(result)
+                    return@execute
+                }
+            }
             val ok = try {
-                input.use { BtProtocol.writeFile(out, fileName, size, it, progress) }
-                true
+                sender.submit<Boolean> { sendViaBluetooth(fileName, size, open, progress) }.get()
             } catch (_: Exception) {
-                // A half-written frame corrupts the stream - drop the connection.
-                disconnect()
                 false
             }
             done(ok)
         }
+    }
+
+    private fun sendViaBluetooth(fileName: String, size: Long, open: () -> InputStream, progress: (Long) -> Unit): Boolean {
+        val out = output ?: return false
+        val input = try { open() } catch (_: Exception) { return false }
+        return try {
+            input.use { BtProtocol.writeFile(out, fileName, size, it, progress) }
+            true
+        } catch (_: Exception) {
+            // A half-written frame corrupts the stream - drop the connection.
+            disconnect()
+            false
+        }
+    }
+
+    /**
+     * Returns null if a Wi-Fi link could not be set up (caller falls back to
+     * Bluetooth), otherwise whether the transfer succeeded.
+     */
+    private fun sendViaWifi(
+        fileName: String,
+        size: Long,
+        open: () -> InputStream,
+        progress: (Long) -> Unit,
+        onWifi: () -> Unit
+    ): Boolean? {
+        val id = offerIds.incrementAndGet()
+        val answers = LinkedBlockingQueue<Any>()
+        wifiAnswers[id] = answers
+        val host = try { WifiTransfer.Host() } catch (_: Exception) { null }
+        var socket: Socket? = null
+        try {
+            val offer = JSONObject().put("id", id).put("name", fileName).put("size", size)
+            if (host != null) {
+                offer.put("port", host.port)
+                    .put("ips", JSONArray(WifiTransfer.localIpv4()))
+                    .put("token", WifiTransfer.toHex(host.token))
+                io.execute { host.accept(18_000)?.let { answers.offer(it) } }
+            }
+            if (!writeJsonBlocking(BtProtocol.TYPE_WIFI_OFFER, offer)) return null
+
+            val deadline = System.currentTimeMillis() + 20_000
+            while (socket == null) {
+                val left = deadline - System.currentTimeMillis()
+                if (left <= 0) return null
+                val item = answers.poll(left, TimeUnit.MILLISECONDS) ?: return null
+                if (item is Socket) {
+                    socket = item
+                } else if (item is Pair<*, *>) {
+                    val json = item.second as JSONObject
+                    if (item.first == BtProtocol.TYPE_WIFI_DECLINE) return null
+                    // PULL: the receiver hosts, we connect to it.
+                    val ips = json.optJSONArray("ips")?.let { arr -> List(arr.length()) { arr.optString(it) } } ?: emptyList()
+                    socket = WifiTransfer.connectAny(
+                        context, ips, json.optInt("port"), WifiTransfer.fromHex(json.optString("token"))
+                    )
+                    if (socket == null) {
+                        writeJsonBlocking(BtProtocol.TYPE_WIFI_DECLINE, JSONObject().put("id", id))
+                        return null
+                    }
+                }
+            }
+            val s = socket ?: return null
+            onWifi()
+            return try {
+                open().use { WifiTransfer.push(s, it, size, progress) }
+            } catch (_: Exception) {
+                false
+            }
+        } finally {
+            wifiAnswers.remove(id)
+            host?.close()
+            runCatching { socket?.close() }
+            answers.forEach { if (it is Socket && it !== socket) runCatching { it.close() } }
+        }
+    }
+
+    /** Receiver side of a Wi-Fi offer: connect to the sender, or host and ask it to connect to us. */
+    private fun receiveWifiOffer(offer: JSONObject) {
+        val id = offer.optLong("id")
+        val name = offer.optString("name", "file")
+        val size = offer.optLong("size")
+        val decline = { writeJsonBlocking(BtProtocol.TYPE_WIFI_DECLINE, JSONObject().put("id", id)) }
+        if (!wifiEnabled() || size <= 0) {
+            decline()
+            return
+        }
+        val ips = offer.optJSONArray("ips")?.let { arr -> List(arr.length()) { arr.optString(it) } } ?: emptyList()
+        var socket = WifiTransfer.connectAny(
+            context, ips, offer.optInt("port"), WifiTransfer.fromHex(offer.optString("token"))
+        )
+        if (socket == null) {
+            val host = try { WifiTransfer.Host() } catch (_: Exception) { null }
+            if (host != null) {
+                try {
+                    val pull = JSONObject().put("id", id).put("port", host.port)
+                        .put("ips", JSONArray(WifiTransfer.localIpv4()))
+                        .put("token", WifiTransfer.toHex(host.token))
+                    if (writeJsonBlocking(BtProtocol.TYPE_WIFI_PULL, pull)) socket = host.accept(8_000)
+                } finally {
+                    host.close()
+                }
+            }
+        }
+        if (socket == null) {
+            decline()
+            return
+        }
+        socket.use { s ->
+            val target = try { listener.onFileIncoming(name, size, true) } catch (_: Exception) { null }
+            if (target != null) WifiTransfer.pull(s, size, target)
+        }
+    }
+
+    private fun writeJsonBlocking(type: Int, json: JSONObject): Boolean = try {
+        sender.submit<Boolean> {
+            val out = output ?: return@submit false
+            BtProtocol.writeJson(out, type, json)
+            true
+        }.get(10, TimeUnit.SECONDS)
+    } catch (_: Exception) {
+        false
     }
 
     fun disconnect() {

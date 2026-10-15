@@ -11,4 +11,7 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowBackground">@color/chat_bg</item>
     </style>
+
+    <!-- Toolbar overflow (⋮) menu: dark text on a light popup (dark variant in values-night) -->
+    <style name="ThemeOverlay.BtChat.Popup" parent="ThemeOverlay.AppCompat.Light" />
 </resources>

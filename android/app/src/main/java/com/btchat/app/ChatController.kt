@@ -52,7 +52,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
     private val ids = AtomicLong(System.currentTimeMillis())
 
     val adapter: BluetoothAdapter? = app.getSystemService(BluetoothManager::class.java)?.adapter
-    private val bt: BluetoothService? = adapter?.let { BluetoothService(it, this) }
+    private val bt: BluetoothService? = adapter?.let { BluetoothService(app, it, this) { prefs.wifiEnabled } }
 
     var state = if (adapter == null) State.NO_BLUETOOTH else State.NEED_PERMISSION
         private set
@@ -286,6 +286,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
         var sendUri = uri
         var name = info.name
         var size = info.size
+        var tempFile: File? = null // reduced / copied version, deleted after sending
 
         if (reduce && ImageTools.isImage(app, uri, name)) {
             val small = try { ImageTools.reduce(app, uri, name) } catch (_: Throwable) { null }
@@ -293,6 +294,9 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
                 sendUri = providerUri(small)
                 name = small.name
                 size = small.length()
+                tempFile = small
+            } else {
+                small?.parentFile?.deleteRecursively()
             }
         }
 
@@ -305,6 +309,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
                 } ?: throw IOException()
                 sendUri = providerUri(copy)
                 size = copy.length()
+                tempFile = copy
             } catch (_: Exception) {
                 post { notice("לא ניתן לקרוא את הקובץ $name") }
                 return
@@ -323,6 +328,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
 
         val total = size
         val finalUri = sendUri
+        val temp = tempFile
         var lastPercent = -1
         val b = bt ?: return
         b.sendFile(
@@ -335,7 +341,9 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
                     post { msg.progress = p; changed(msg, progressOnly = true) }
                 }
             },
+            onWifi = { post { msg.viaWifi = true; changed(msg, progressOnly = false) } },
             done = { ok ->
+                temp?.parentFile?.deleteRecursively()
                 post {
                     msg.status = if (ok) MsgStatus.DONE else MsgStatus.FAILED
                     history.append(address, msg)
@@ -348,6 +356,18 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
 
     private fun providerUri(file: File): Uri =
         FileProvider.getUriForFile(app, "${app.packageName}.files", file)
+
+    // ---------------------------------------------------------------- temporary files
+
+    /** Photos taken from the chat and leftover copies prepared for sending. */
+    private fun tempDirs() = listOf(File(app.cacheDir, "camera"), File(app.cacheDir, "outgoing"))
+
+    fun tempFilesSize(): Long =
+        tempDirs().sumOf { dir -> dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
+
+    fun clearTempFiles() {
+        tempDirs().forEach { it.deleteRecursively() }
+    }
 
     // ---------------------------------------------------------------- BluetoothService callbacks (background threads)
 
@@ -418,7 +438,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
         notifyIncoming(address, text)
     }
 
-    override fun onFileIncoming(fileName: String, size: Long): BluetoothService.IncomingFile? {
+    override fun onFileIncoming(fileName: String, size: Long, viaWifi: Boolean): BluetoothService.IncomingFile? {
         val address = peerAddress ?: return null
         val target = try {
             fileStore.create(fileName)
@@ -429,7 +449,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
         val msg = ChatMessage(
             ids.incrementAndGet(), false, MsgKind.FILE, System.currentTimeMillis(),
             fileName = target.finalName, fileUri = target.uri.toString(), fileSize = size,
-            location = target.location, status = MsgStatus.PENDING
+            location = target.location, status = MsgStatus.PENDING, viaWifi = viaWifi
         )
         post { show(address, msg) }
 

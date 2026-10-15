@@ -22,6 +22,11 @@
                     <TextBlock TextWrapping="Wrap" Text="סגירת החלון משאירה את BT Chat פועל ברקע (אייקון ליד השעון), כדי לקבל הודעות וחיבורים"/>
                 </CheckBox>
 
+                <TextBlock Text="העברה מהירה" Style="{StaticResource SectionTitle}"/>
+                <CheckBox x:Name="ChkWifi" Margin="0,2">
+                    <TextBlock TextWrapping="Wrap" Text="קבצים מעל 1MB עוברים ברשת Wi-Fi המשותפת (או נקודה חמה של הטלפון) - מהיר בהרבה. אם אין רשת משותפת, עוברים ב-Bluetooth כרגיל."/>
+                </CheckBox>
+
                 <TextBlock Text="תיקייה לקבצים שמתקבלים" Style="{StaticResource SectionTitle}"/>
                 <TextBox x:Name="TxtFolder" Style="{StaticResource FieldBox}" IsReadOnly="True" FlowDirection="LeftToRight"/>
                 <WrapPanel Margin="0,8,0,0">

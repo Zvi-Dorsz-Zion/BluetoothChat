@@ -5,6 +5,7 @@ import java.io.DataOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.util.UUID
+import org.json.JSONObject
 
 /**
  * BT-Chat Protocol v2 (see /PROTOCOL.md in repo root).
@@ -19,6 +20,9 @@ object BtProtocol {
     const val TYPE_FILE = 0x02
     const val TYPE_ACCEPT = 0x04
     const val TYPE_REJECT = 0x05
+    const val TYPE_WIFI_OFFER = 0x06
+    const val TYPE_WIFI_PULL = 0x07
+    const val TYPE_WIFI_DECLINE = 0x08
 
     const val CHUNK = 16 * 1024
     const val MAX_FILE_SIZE = Int.MAX_VALUE - 4096L
@@ -27,6 +31,20 @@ object BtProtocol {
         out.writeByte(type)
         out.writeInt(0)
         out.flush()
+    }
+
+    fun writeJson(out: DataOutputStream, type: Int, json: JSONObject) {
+        val payload = json.toString().toByteArray(Charsets.UTF_8)
+        out.writeByte(type)
+        out.writeInt(payload.size)
+        out.write(payload)
+        out.flush()
+    }
+
+    fun readJson(input: DataInputStream, length: Int): JSONObject {
+        val bytes = ByteArray(length)
+        input.readFully(bytes)
+        return try { JSONObject(String(bytes, Charsets.UTF_8)) } catch (_: Exception) { JSONObject() }
     }
 
     fun writeText(out: DataOutputStream, text: String) {

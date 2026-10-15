@@ -18,6 +18,31 @@ public static class BtProtocol
     public const byte TypeFile = 0x02;
     public const byte TypeAccept = 0x04;
     public const byte TypeReject = 0x05;
+    public const byte TypeWifiOffer = 0x06;
+    public const byte TypeWifiPull = 0x07;
+    public const byte TypeWifiDecline = 0x08;
+
+    public static void WriteJson(Stream output, byte type, System.Text.Json.Nodes.JsonObject json)
+    {
+        var payload = Encoding.UTF8.GetBytes(json.ToJsonString());
+        WriteHeader(output, type, payload.Length);
+        output.Write(payload, 0, payload.Length);
+        output.Flush();
+    }
+
+    public static System.Text.Json.Nodes.JsonObject ReadJson(Stream input, int length)
+    {
+        var bytes = ReadExact(input, length);
+        try
+        {
+            return System.Text.Json.Nodes.JsonNode.Parse(Encoding.UTF8.GetString(bytes)) as System.Text.Json.Nodes.JsonObject
+                   ?? new System.Text.Json.Nodes.JsonObject();
+        }
+        catch
+        {
+            return new System.Text.Json.Nodes.JsonObject();
+        }
+    }
 
     public const int Chunk = 16 * 1024;
     public const long MaxFileSize = int.MaxValue - 4096L;

@@ -63,6 +63,10 @@ class SettingsActivity : AppCompatActivity() {
                 showTrusted()
                 true
             }
+            findPreference<Preference>("temp_files")?.setOnPreferenceClickListener {
+                confirmClearTemp()
+                true
+            }
             findPreference<Preference>("about")?.summary = try {
                 val ctx = requireContext()
                 "גרסה " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
@@ -78,6 +82,24 @@ class SettingsActivity : AppCompatActivity() {
             val count = chat.prefs.trustedDevices().size
             findPreference<Preference>("trusted_screen")?.summary =
                 if (count == 0) "אין. כל חיבור נכנס דורש אישור." else "$count מכשירים מתחברים בלי לשאול"
+            findPreference<Preference>("temp_files")?.summary =
+                "תמונות שצילמת מהצ'אט ושלחת: ${MessageAdapter.formatSize(chat.tempFilesSize())}"
+        }
+
+        private fun confirmClearTemp() {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("ניקוי קבצים זמניים")
+                .setMessage(
+                    "יימחקו התמונות שצילמת מתוך הצ'אט (${MessageAdapter.formatSize(chat.tempFilesSize())}).\n" +
+                        "הן כבר נשלחו, והעותק נמצא אצל המקבל. בהיסטוריה אצלך הן יופיעו כ\"לא זמין\".\n" +
+                        "תמונות ששלחת מהגלריה לא נמחקות - הן לא שוכפלו."
+                )
+                .setPositiveButton("מחק") { _, _ ->
+                    chat.clearTempFiles()
+                    refresh()
+                }
+                .setNegativeButton("ביטול", null)
+                .show()
         }
 
         private fun showTrusted() {
