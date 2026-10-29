@@ -50,8 +50,6 @@ public partial class MainWindow : Window
         _bt.WifiEnabled = () => _settings.WifiEnabled;
         _bt.DirectMode = () => _settings.DirectMode;
         _bt.Notice += text => Ui(() => ShowInfo("רשת ישירה", text));
-        // Ctrl+V / "Paste" in the message box: files and images from the clipboard are sent as files.
-        CommandManager.AddPreviewExecutedHandler(EditMessage, EditMessage_PreviewExecuted);
         _retryListen.Tick += (_, _) => { _retryListen.Stop(); StartListening(); };
 
         Loaded += (_, _) =>
@@ -690,35 +688,86 @@ public partial class MainWindow : Window
 
     private bool CanSend => _state == State.Connected && _peer != null && _conversationKey == _peer.Key;
 
-    private void EditMessage_PreviewExecuted(object sender, ExecutedRoutedEventArgs e)
+    /// Ctrl+V anywhere: files / images on the clipboard are sent. Ctrl+C: copies the selected message.
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Command != ApplicationCommands.Paste) return;
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+        if (e.Key == Key.V && TryPasteFiles()) e.Handled = true;
+        else if (e.Key == Key.C && TryCopySelectedMessage()) e.Handled = true;
+    }
+
+    private bool TryPasteFiles()
+    {
         try
         {
+            List<string>? files = null;
             if (Clipboard.ContainsFileDropList())
             {
-                e.Handled = true;
-                var files = Clipboard.GetFileDropList().Cast<string>().Where(File.Exists).ToList();
-                if (files.Count > 0) SendFiles(files);
+                files = Clipboard.GetFileDropList().Cast<string>().Where(File.Exists).ToList();
             }
             else if (Clipboard.ContainsImage() && !Clipboard.ContainsText())
             {
-                e.Handled = true;
                 var image = Clipboard.GetImage();
-                if (image == null) return;
+                if (image == null) return false;
                 var dir = Path.Combine(Path.GetTempPath(), "BtChat", "clipboard");
                 Directory.CreateDirectory(dir);
                 var path = Path.Combine(dir, $"תמונה {DateTime.Now:yyyy-MM-dd HH-mm-ss}.png");
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(image));
                 using (var fs = File.Create(path)) encoder.Save(fs);
-                SendFiles(new List<string> { path });
+                files = new List<string> { path };
             }
+            if (files == null || files.Count == 0) return false; // plain text: normal paste
+            if (!CanSend)
+            {
+                ShowInfo("אין חיבור", "התחבר למכשיר כדי לשלוח את הקבצים שהעתקת.");
+                return true;
+            }
+            SendFiles(files);
+            return true;
         }
         catch (Exception ex)
         {
             AppLog.Write("paste failed: " + ex.Message);
+            return false;
         }
+    }
+
+    private bool TryCopySelectedMessage()
+    {
+        // Text selected inside a text box - let the normal copy happen.
+        if (Keyboard.FocusedElement is TextBox box && box.SelectionLength > 0) return false;
+        if (ListMessages.SelectedItem is not ChatMessage m) return false;
+        try
+        {
+            if (m.IsText && m.Text != null)
+            {
+                Clipboard.SetText(m.Text);
+                return true;
+            }
+            if (m.IsFile && m.FilePath != null && File.Exists(m.FilePath))
+            {
+                CopyFileToClipboard(m.FilePath);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("copy failed: " + ex.Message);
+        }
+        return false;
+    }
+
+    private static void CopyFileToClipboard(string path)
+    {
+        var list = new System.Collections.Specialized.StringCollection { path };
+        Clipboard.SetFileDropList(list);
+    }
+
+    private void MenuCopyFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageOf(sender) is not { } m || !FileAvailable(m)) return;
+        CopyFileToClipboard(m.FilePath!);
     }
 
     private void EditMessage_PreviewKeyDown(object sender, KeyEventArgs e)

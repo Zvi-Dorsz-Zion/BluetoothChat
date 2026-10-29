@@ -5,7 +5,7 @@
         FlowDirection="RightToLeft" FontFamily="Segoe UI" Icon="/app.ico"
         Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen"
         AllowDrop="True" DragEnter="Window_DragEnter" DragLeave="Window_DragLeave" Drop="Window_Drop"
-        SizeChanged="Window_SizeChanged" Closing="Window_Closing">
+        SizeChanged="Window_SizeChanged" Closing="Window_Closing" PreviewKeyDown="Window_PreviewKeyDown">
 
     <Window.Resources>
         <!-- Device row context menu -->
@@ -40,12 +40,19 @@
         </Style>
 
         <Style x:Key="MessageItemStyle" TargetType="ListBoxItem">
-            <Setter Property="Focusable" Value="False"/>
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <ContentPresenter/>
+                        <Border x:Name="Bd" Background="Transparent">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#141E6FE8"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -62,6 +69,8 @@
                         <MenuItem Header="פתח" Click="MenuOpen_Click"
                                   Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
                         <MenuItem Header="הצג בתיקייה" Click="MenuShowInFolder_Click"
+                                  Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
+                        <MenuItem Header="העתק קובץ (להדבקה בסייר הקבצים)" Click="MenuCopyFile_Click"
                                   Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
                         <MenuItem Header="העתק נתיב" Click="MenuCopyPath_Click"
                                   Visibility="{Binding IsFile, Converter={StaticResource BoolToVis}}"/>
