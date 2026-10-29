@@ -10,4 +10,14 @@
         <item>reduced</item>
         <item>original</item>
     </string-array>
+    <string-array name="direct_entries">
+        <item>כבוי</item>
+        <item>רק כשאין רשת משותפת (מומלץ)</item>
+        <item>תמיד לקבצים גדולים</item>
+    </string-array>
+    <string-array name="direct_values">
+        <item>off</item>
+        <item>auto</item>
+        <item>always</item>
+    </string-array>
 </resources>

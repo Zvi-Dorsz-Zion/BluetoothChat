@@ -52,7 +52,9 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
     private val ids = AtomicLong(System.currentTimeMillis())
 
     val adapter: BluetoothAdapter? = app.getSystemService(BluetoothManager::class.java)?.adapter
-    private val bt: BluetoothService? = adapter?.let { BluetoothService(app, it, this) { prefs.wifiEnabled } }
+    private val bt: BluetoothService? = adapter?.let {
+        BluetoothService(app, it, this, wifiEnabled = { prefs.wifiEnabled }, directMode = { prefs.directMode })
+    }
 
     var state = if (adapter == null) State.NO_BLUETOOTH else State.NEED_PERMISSION
         private set
@@ -233,6 +235,11 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
         ui?.onStateChanged()
         ChatService.update(app, statusText())
     }
+
+    /** Devices that ever connected through BT Chat (or have a conversation), newest activity first. */
+    fun knownDevices(): List<String> =
+        (prefs.knownDevices() + history.knownAddresses()).distinct()
+            .sortedByDescending { history.last(it)?.time ?: 0L }
 
     fun clearHistory(address: String) {
         history.clear(address)
@@ -430,6 +437,8 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
         if (was != State.LISTENING && was != State.BT_OFF) afterConnectionEnded()
     }
 
+    override fun onNotice(text: String) = post { notice(text) }
+
     override fun onTextReceived(text: String) = post {
         val address = peerAddress ?: return@post
         val msg = ChatMessage(ids.incrementAndGet(), false, MsgKind.TEXT, System.currentTimeMillis(), text = text)
@@ -481,6 +490,7 @@ class ChatController(private val app: Application) : BluetoothService.Listener {
     // ---------------------------------------------------------------- helpers
 
     private fun markConnected(address: String) {
+        prefs.addKnownDevice(address)
         peerAddress = address
         cancelling = false
         if (conversation != address) openConversation(address)

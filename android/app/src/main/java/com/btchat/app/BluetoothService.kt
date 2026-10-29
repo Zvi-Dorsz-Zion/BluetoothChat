@@ -18,6 +18,7 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
@@ -39,7 +40,9 @@ class BluetoothService(
     private val context: Context,
     private val adapter: BluetoothAdapter,
     private val listener: Listener,
-    private val wifiEnabled: () -> Boolean
+    private val wifiEnabled: () -> Boolean,
+    /** Direct network (phone hotspot) mode: "off", "auto" (only when needed) or "always". */
+    private val directMode: () -> String
 ) {
     interface Listener {
         fun onListenFailed(message: String)
@@ -52,6 +55,8 @@ class BluetoothService(
         fun onTextReceived(text: String)
         /** Called on a background thread. Return null to drop the file. */
         fun onFileIncoming(fileName: String, size: Long, viaWifi: Boolean): IncomingFile?
+        /** Something the user should know (e.g. why the direct network could not open). */
+        fun onNotice(text: String)
     }
 
     interface IncomingFile {
@@ -68,6 +73,16 @@ class BluetoothService(
     /** Answers (PULL / DECLINE) to our Wi-Fi offers, by offer id. */
     private val wifiAnswers = ConcurrentHashMap<Long, LinkedBlockingQueue<Any>>()
     private val offerIds = AtomicLong(System.currentTimeMillis())
+
+    /** Platform of the other side ("android" / "windows"), from its HELLO. Null for old versions. */
+    @Volatile var peerPlatform: String? = null
+        private set
+
+    private val direct = DirectNetwork(context)
+    private val timers = Executors.newSingleThreadScheduledExecutor()
+    private val netAnswers = LinkedBlockingQueue<JSONObject>()
+    @Volatile private var directJoined = false
+    @Volatile private var directIdle: ScheduledFuture<*>? = null
 
     @Volatile private var wantListen = false
     @Volatile private var serverSocket: BluetoothServerSocket? = null
@@ -123,7 +138,21 @@ class BluetoothService(
         serverSocket = null
     }
 
-    fun approve() = sendControl(BtProtocol.TYPE_ACCEPT)
+    fun approve() {
+        sendControl(BtProtocol.TYPE_ACCEPT)
+        sendHello()
+    }
+
+    private fun sendHello() {
+        sender.execute {
+            try {
+                output?.let {
+                    BtProtocol.writeJson(it, BtProtocol.TYPE_HELLO, JSONObject().put("platform", "android").put("version", 22))
+                }
+            } catch (_: IOException) {
+            }
+        }
+    }
 
     fun reject() {
         sender.execute {
@@ -191,7 +220,16 @@ class BluetoothService(
                         listener.onTextReceived(String(bytes, Charsets.UTF_8))
                     }
                     BtProtocol.TYPE_FILE -> receiveFile(input, length)
-                    BtProtocol.TYPE_ACCEPT -> listener.onConnected(device)
+                    BtProtocol.TYPE_ACCEPT -> {
+                        listener.onConnected(device)
+                        sendHello()
+                    }
+                    BtProtocol.TYPE_HELLO -> peerPlatform = BtProtocol.readJson(input, length).optString("platform")
+                    BtProtocol.TYPE_NET_REQUEST -> {
+                        BtProtocol.skipFully(input, length.toLong())
+                        io.execute { runCatching { openDirectForPeer() } }
+                    }
+                    BtProtocol.TYPE_NET_JOINED -> netAnswers.offer(BtProtocol.readJson(input, length))
                     BtProtocol.TYPE_REJECT -> {
                         listener.onRejected(device)
                         break@loop
@@ -217,6 +255,8 @@ class BluetoothService(
                 }
             }
             closeQuietly(s)
+            peerPlatform = null
+            stopDirect(notifyPeer = false)
             listener.onDisconnected(device)
         }
     }
@@ -304,7 +344,13 @@ class BluetoothService(
                 return@execute
             }
             if (size >= WifiTransfer.MIN_SIZE && wifiEnabled()) {
-                val result = try { sendViaWifi(fileName, size, open, progress, onWifi) } catch (_: Exception) { null }
+                val mode = directMode()
+                if (mode == "always") ensureDirectNetwork()
+                var result = try { sendViaWifi(fileName, size, open, progress, onWifi) } catch (_: Exception) { null }
+                if (result == null && mode == "auto" && size >= DIRECT_MIN_SIZE && !direct.isActive && ensureDirectNetwork()) {
+                    result = try { sendViaWifi(fileName, size, open, progress, onWifi) } catch (_: Exception) { null }
+                }
+                if (direct.isActive) scheduleDirectIdle()
                 if (result != null) {
                     done(result)
                     return@execute
@@ -429,6 +475,77 @@ class BluetoothService(
             val target = try { listener.onFileIncoming(name, size, true) } catch (_: Exception) { null }
             if (target != null) WifiTransfer.pull(s, size, target)
         }
+        if (direct.isActive) scheduleDirectIdle()
+    }
+
+    // ---- Direct network (the phone opens a temporary hotspot, Windows joins it) ----
+
+    /** We send to Windows: open our hotspot and wait until Windows has joined it. */
+    private fun ensureDirectNetwork(): Boolean {
+        if (peerPlatform != "windows") return false
+        cancelDirectIdle()
+        if (direct.isActive && directJoined) return true
+        return openDirectAndWait(requested = false)
+    }
+
+    /** Windows asked for a direct network (it wants to send us a big file). */
+    private fun openDirectForPeer() {
+        cancelDirectIdle()
+        if (directMode() == "off") {
+            writeJsonBlocking(BtProtocol.TYPE_NET_READY, JSONObject().put("ok", false).put("reason", "כבוי בהגדרות הטלפון"))
+            return
+        }
+        if (direct.isActive && directJoined) {
+            direct.start().let { c ->
+                writeJsonBlocking(BtProtocol.TYPE_NET_READY, JSONObject().put("ok", true).put("ssid", c.ssid).put("pass", c.password))
+            }
+            scheduleDirectIdle()
+            return
+        }
+        if (openDirectAndWait(requested = true)) scheduleDirectIdle()
+    }
+
+    private fun openDirectAndWait(requested: Boolean): Boolean {
+        val creds = try {
+            direct.start()
+        } catch (e: DirectNetwork.Failure) {
+            if (requested) {
+                writeJsonBlocking(BtProtocol.TYPE_NET_READY, JSONObject().put("ok", false).put("reason", e.message ?: ""))
+            }
+            listener.onNotice("רשת ישירה: ${e.message}")
+            return false
+        }
+        netAnswers.clear()
+        val ready = JSONObject().put("ok", true).put("ssid", creds.ssid).put("pass", creds.password)
+        if (!writeJsonBlocking(BtProtocol.TYPE_NET_READY, ready)) {
+            stopDirect(notifyPeer = false)
+            return false
+        }
+        val answer = try { netAnswers.poll(45, TimeUnit.SECONDS) } catch (_: InterruptedException) { null }
+        directJoined = answer?.optBoolean("ok") == true
+        if (!directJoined) {
+            stopDirect(notifyPeer = true)
+            listener.onNotice("רשת ישירה: המחשב לא הצליח להתחבר לנקודה החמה של הטלפון")
+        }
+        return directJoined
+    }
+
+    private fun scheduleDirectIdle() {
+        cancelDirectIdle()
+        directIdle = timers.schedule(Runnable { stopDirect(notifyPeer = true) }, DIRECT_IDLE_SECONDS, TimeUnit.SECONDS)
+    }
+
+    private fun cancelDirectIdle() {
+        directIdle?.cancel(false)
+        directIdle = null
+    }
+
+    private fun stopDirect(notifyPeer: Boolean) {
+        cancelDirectIdle()
+        if (!direct.isActive) return
+        if (notifyPeer) sendControl(BtProtocol.TYPE_NET_CLOSE)
+        direct.stop()
+        directJoined = false
     }
 
     private fun writeJsonBlocking(type: Int, json: JSONObject): Boolean = try {
@@ -452,11 +569,19 @@ class BluetoothService(
     }
 
     fun shutdown() {
+        stopDirect(notifyPeer = true)
         stopListening()
         disconnect()
     }
 
     private fun closeQuietly(c: java.io.Closeable) {
         try { c.close() } catch (_: IOException) { }
+    }
+
+    companion object {
+        /** Below this size Bluetooth is fast enough - not worth opening a hotspot. */
+        const val DIRECT_MIN_SIZE = 5L * 1024 * 1024
+        /** The hotspot closes after this long without transfers. */
+        const val DIRECT_IDLE_SECONDS = 90L
     }
 }

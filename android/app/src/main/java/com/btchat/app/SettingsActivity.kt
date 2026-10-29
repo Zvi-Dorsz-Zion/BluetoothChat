@@ -4,10 +4,20 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.btchat.app.databinding.ActivitySettingsBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+
+private const val DIRECT_SUMMARY =
+    "כשהטלפון והמחשב לא על אותה רשת, הטלפון פותח לרגע נקודה חמה פרטית והמחשב מתחבר אליה, " +
+        "רק לקבצים מעל 5MB. המחשב מתנתק לזמן ההעברה מהרשת הרגילה שלו וחוזר אליה לבד. " +
+        "דורש הרשאת מיקום (ובאנדרואיד 12 ומטה גם מיקום פועל)."
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -32,6 +42,10 @@ class SettingsActivity : AppCompatActivity() {
     class SettingsFragment : PreferenceFragmentCompat() {
 
         private val chat get() = (requireActivity().application as BtChatApp).controller
+
+        private val directPermission = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { }
 
         private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri != null) {
@@ -63,6 +77,12 @@ class SettingsActivity : AppCompatActivity() {
                 showTrusted()
                 true
             }
+            findPreference<Preference>("direct_network")?.setOnPreferenceChangeListener { _, value ->
+                if (value != "off") askDirectPermission()
+                true
+            }
+            findPreference<ListPreference>("direct_network")?.summaryProvider =
+                Preference.SummaryProvider<ListPreference> { p -> "${p.entry}\n$DIRECT_SUMMARY" }
             findPreference<Preference>("temp_files")?.setOnPreferenceClickListener {
                 confirmClearTemp()
                 true
@@ -84,6 +104,16 @@ class SettingsActivity : AppCompatActivity() {
                 if (count == 0) "אין. כל חיבור נכנס דורש אישור." else "$count מכשירים מתחברים בלי לשאול"
             findPreference<Preference>("temp_files")?.summary =
                 "תמונות שצילמת מהצ'אט ושלחת: ${MessageAdapter.formatSize(chat.tempFilesSize())}"
+        }
+
+        private fun askDirectPermission() {
+            val permissions =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+                else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            val ctx = requireContext()
+            if (permissions.any { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }) {
+                directPermission.launch(permissions)
+            }
         }
 
         private fun confirmClearTemp() {

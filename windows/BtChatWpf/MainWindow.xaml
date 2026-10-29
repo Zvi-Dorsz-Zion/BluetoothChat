@@ -14,6 +14,7 @@
             <MenuItem Header="שנה שם..." Click="DeviceMenuRename_Click"/>
             <Separator/>
             <MenuItem Header="מחק היסטוריה" Click="DeviceMenuClear_Click"/>
+            <MenuItem Header="הסר מהרשימה" Click="DeviceMenuRemove_Click"/>
         </ContextMenu>
 
         <Style x:Key="DeviceItemStyle" TargetType="ListBoxItem">
@@ -156,7 +157,7 @@
                            Foreground="{StaticResource TextSub}" FontSize="12"/>
                 <TextBlock x:Name="TxtNoDevices" DockPanel.Dock="Top" Margin="18,4,16,0" TextWrapping="Wrap"
                            Foreground="{StaticResource TextSub}" FontSize="12" Visibility="Collapsed"
-                           Text="אין מכשירים מזווגים. לחץ &quot;צמד מכשיר חדש&quot;."/>
+                           Text="עוד לא התחברת לאף מכשיר. לחץ &quot;צמד מכשיר חדש&quot; כדי לבחור מכשיר מזווג או לצמד חדש."/>
 
                 <ListBox x:Name="ListDevices" BorderThickness="0" Background="Transparent"
                          ItemContainerStyle="{StaticResource DeviceItemStyle}"
@@ -249,7 +250,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <Button x:Name="BtnAttach" Style="{StaticResource IconButton}" Content="&#xE723;"
-                            ToolTip="שלח קבצים (אפשר גם לגרור לחלון)" VerticalAlignment="Bottom" Click="BtnAttach_Click"/>
+                            ToolTip="שלח קבצים (אפשר גם לגרור לחלון או להדביק עם Ctrl+V)" VerticalAlignment="Bottom" Click="BtnAttach_Click"/>
                     <Grid Grid.Column="1" Margin="6,0">
                         <TextBox x:Name="EditMessage" Style="{StaticResource InputBox}" AcceptsReturn="True"
                                  TextWrapping="Wrap" MaxHeight="130" VerticalScrollBarVisibility="Auto"

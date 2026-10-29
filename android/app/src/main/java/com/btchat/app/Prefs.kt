@@ -20,6 +20,27 @@ class Prefs(context: Context) {
     val wifiEnabled: Boolean
         get() = sp.getBoolean(KEY_WIFI, true)
 
+    /** Direct network (phone hotspot) when there is no common Wi-Fi: "off", "auto" or "always". */
+    val directMode: String
+        get() = sp.getString(KEY_DIRECT, "auto") ?: "auto"
+
+    /** We already asked once for the location permission the hotspot needs. */
+    var askedDirectPermission: Boolean
+        get() = sp.getBoolean(KEY_ASKED_DIRECT_PERMISSION, false)
+        set(value) = sp.edit().putBoolean(KEY_ASKED_DIRECT_PERMISSION, value).apply()
+
+    /** Devices that connected through BT Chat at least once. */
+    fun knownDevices(): Set<String> = sp.getStringSet(KEY_KNOWN, emptySet())?.toSet() ?: emptySet()
+
+    fun addKnownDevice(address: String) {
+        val set = knownDevices()
+        if (address !in set) sp.edit().putStringSet(KEY_KNOWN, set + address).apply()
+    }
+
+    fun removeKnownDevice(address: String) {
+        sp.edit().putStringSet(KEY_KNOWN, knownDevices() - address).apply()
+    }
+
     /** "ask", "reduced" or "original". */
     val imageQuality: String
         get() = sp.getString(KEY_IMAGE_QUALITY, "ask") ?: "ask"
@@ -48,6 +69,9 @@ class Prefs(context: Context) {
     companion object {
         const val KEY_NOTIFICATIONS = "notifications"
         const val KEY_WIFI = "wifi_transfer"
+        const val KEY_DIRECT = "direct_network"
+        private const val KEY_ASKED_DIRECT_PERMISSION = "asked_direct_permission"
+        private const val KEY_KNOWN = "known_devices"
         const val KEY_SAVE_TREE = "save_tree_uri"
         const val KEY_IMAGE_QUALITY = "image_quality"
         const val KEY_LAST_ADDRESS = "last_address"

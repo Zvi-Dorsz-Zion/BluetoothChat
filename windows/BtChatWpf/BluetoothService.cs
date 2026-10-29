@@ -43,6 +43,21 @@ public sealed class BluetoothService
     /// Whether big files may go over the local Wi-Fi network.
     public Func<bool> WifiEnabled = () => true;
 
+    /// Direct network (phone hotspot) mode: "off", "auto" (only when needed) or "always".
+    public Func<string> DirectMode = () => "auto";
+
+    /// Something the user should know (e.g. why the direct network could not be used).
+    public event Action<string>? Notice;
+
+    /// Platform of the other side ("android" / "windows"), from its HELLO. Null for old versions.
+    public string? PeerPlatform { get; private set; }
+
+    /// Below this size Bluetooth is fast enough - not worth switching networks.
+    public const long DirectMinSize = 5L * 1024 * 1024;
+
+    private readonly DirectNetwork _direct = new();
+    private TaskCompletionSource<System.Text.Json.Nodes.JsonObject>? _netReady;
+
     private readonly object _gate = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly SemaphoreSlim _fileLock = new(1, 1);
@@ -139,7 +154,17 @@ public sealed class BluetoothService
         try { listener?.Stop(); } catch { }
     }
 
-    public void Approve() => _ = SendControlAsync(BtProtocol.TypeAccept);
+    public void Approve()
+    {
+        _ = Task.Run(async () =>
+        {
+            await SendControlAsync(BtProtocol.TypeAccept);
+            await SendHelloAsync();
+        });
+    }
+
+    private Task<bool> SendHelloAsync() => WriteJsonAsync(BtProtocol.TypeHello,
+        new System.Text.Json.Nodes.JsonObject { ["platform"] = "windows", ["version"] = 22 });
 
     public void Reject()
     {
@@ -246,6 +271,21 @@ public sealed class BluetoothService
                         break;
                     case BtProtocol.TypeAccept:
                         Connected?.Invoke(peer);
+                        _ = SendHelloAsync();
+                        break;
+                    case BtProtocol.TypeHello:
+                        PeerPlatform = (string?)BtProtocol.ReadJson(input, length)["platform"];
+                        AppLog.Write($"peer platform: {PeerPlatform}");
+                        break;
+                    case BtProtocol.TypeNetReady:
+                        var ready = BtProtocol.ReadJson(input, length);
+                        var waitingReady = _netReady;
+                        if (waitingReady != null) waitingReady.TrySetResult(ready);
+                        else _ = Task.Run(() => JoinForPeerAsync(ready)); // the phone opened it to send us a file
+                        break;
+                    case BtProtocol.TypeNetClose:
+                        BtProtocol.Skip(input, length);
+                        _ = Task.Run(_direct.Leave);
                         break;
                     case BtProtocol.TypeReject:
                         Rejected?.Invoke(peer);
@@ -281,6 +321,8 @@ public sealed class BluetoothService
                 }
             }
             try { client.Close(); } catch { }
+            PeerPlatform = null;
+            if (_direct.IsJoined) _ = Task.Run(_direct.Leave);
             Disconnected?.Invoke(peer);
         }
     }
@@ -368,8 +410,16 @@ public sealed class BluetoothService
 
             if (size >= WifiTransfer.MinSize && WifiEnabled())
             {
+                string mode = DirectMode();
+                if (mode == "always" && PeerPlatform == "android") await EnsureDirectNetworkAsync();
                 bool? viaWifi = null;
                 try { viaWifi = await SendViaWifiAsync(path, fileName, size, progress, onWifi); } catch { }
+                if (viaWifi == null && mode == "auto" && size >= DirectMinSize && PeerPlatform == "android" &&
+                    !_direct.IsJoined && await EnsureDirectNetworkAsync())
+                {
+                    try { viaWifi = await SendViaWifiAsync(path, fileName, size, progress, onWifi); } catch { }
+                }
+                AppLog.Write($"send '{fileName}' ({size} bytes): {(viaWifi.HasValue ? "wifi " + (viaWifi.Value ? "ok" : "failed") : "bluetooth")}");
                 if (viaWifi.HasValue) return viaWifi.Value;
             }
             return await SendViaBluetoothAsync(path, fileName, progress);
@@ -488,15 +538,67 @@ public sealed class BluetoothService
 
         if (client == null)
         {
+            AppLog.Write($"receive '{name}' ({size} bytes): no Wi-Fi link (phone ips: {string.Join(",", ips)}; pc ips: {string.Join(",", WifiTransfer.LocalIpv4())}) - bluetooth");
             await WriteJsonAsync(BtProtocol.TypeWifiDecline, decline);
             return;
         }
+        AppLog.Write($"receive '{name}' ({size} bytes): over Wi-Fi");
         using (client)
         {
             IIncomingFile? target = null;
             try { target = FileIncoming?.Invoke(name, size, true); } catch { }
             if (target != null) WifiTransfer.Pull(client, size, target);
         }
+    }
+
+    // ---------------------------------------------------------------- direct network
+
+    /// We want to send a big file: ask the phone to open its hotspot and join it.
+    private async Task<bool> EnsureDirectNetworkAsync()
+    {
+        if (_direct.IsJoined) return true;
+        var wait = new TaskCompletionSource<System.Text.Json.Nodes.JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _netReady = wait;
+        try
+        {
+            AppLog.Write("direct: asking the phone for a hotspot");
+            if (!await WriteJsonAsync(BtProtocol.TypeNetRequest, new System.Text.Json.Nodes.JsonObject())) return false;
+            var first = await Task.WhenAny(wait.Task, Task.Delay(30_000));
+            if (first != wait.Task)
+            {
+                AppLog.Write("direct: no answer from the phone");
+                return false;
+            }
+            return await JoinForPeerAsync(wait.Task.Result);
+        }
+        finally
+        {
+            _netReady = null;
+        }
+    }
+
+    /// The phone's hotspot details arrived: join it (unless turned off here) and report back.
+    private async Task<bool> JoinForPeerAsync(System.Text.Json.Nodes.JsonObject ready)
+    {
+        bool ok = false;
+        if ((bool?)ready["ok"] != true)
+        {
+            string reason = (string?)ready["reason"] ?? "";
+            AppLog.Write("direct: phone could not open a hotspot: " + reason);
+            Notice?.Invoke("הטלפון לא פתח רשת ישירה" + (reason.Length > 0 ? ": " + reason : ""));
+            return false;
+        }
+        if (DirectMode() == "off")
+        {
+            AppLog.Write("direct: turned off in settings - not joining");
+        }
+        else
+        {
+            ok = await _direct.JoinAsync((string?)ready["ssid"] ?? "", (string?)ready["pass"] ?? "");
+            if (!ok) Notice?.Invoke("המחשב לא הצליח להתחבר לנקודה החמה של הטלפון. הקובץ יישלח ב-Bluetooth.");
+        }
+        await WriteJsonAsync(BtProtocol.TypeNetJoined, new System.Text.Json.Nodes.JsonObject { ["ok"] = ok });
+        return ok;
     }
 
     private async Task<bool> WriteJsonAsync(byte type, System.Text.Json.Nodes.JsonObject json)
@@ -530,6 +632,7 @@ public sealed class BluetoothService
 
     public void Shutdown()
     {
+        _direct.Leave();
         StopListening();
         Disconnect();
     }

@@ -45,7 +45,9 @@ class DevicesActivity : AppCompatActivity() {
             val title: String,
             val subtitle: String,
             val known: Boolean,
-            val connected: Boolean
+            val connected: Boolean,
+            /** Paired in the system but never used with BT Chat - tapping connects (no pairing needed). */
+            val paired: Boolean = false
         ) : Row()
     }
 
@@ -54,6 +56,8 @@ class DevicesActivity : AppCompatActivity() {
     private val rows = ArrayList<Row>()
     private val found = LinkedHashMap<String, BluetoothDevice>()
     private var scanning = false
+    /** Show the "other paired devices" section (after the user pressed search). */
+    private var showOthers = false
     private var bondingAddress: String? = null
     private val listAdapter = DevicesAdapter()
 
@@ -104,7 +108,11 @@ class DevicesActivity : AppCompatActivity() {
 
         binding.list.layoutManager = LinearLayoutManager(this)
         binding.list.adapter = listAdapter
-        binding.btnScan.setOnClickListener { if (scanning) stopScan() else startScan() }
+        binding.btnScan.setOnClickListener {
+            showOthers = true
+            if (scanning) stopScan() else startScan()
+            rebuild()
+        }
 
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
@@ -137,21 +145,31 @@ class DevicesActivity : AppCompatActivity() {
     @SuppressLint("NotifyDataSetChanged")
     private fun rebuild() {
         rows.clear()
-        val adapter = chat.adapter
-        val bonded = runCatching { adapter?.bondedDevices?.map { it.address } }.getOrNull() ?: emptyList()
-        val known = (bonded + chat.history.knownAddresses()).distinct()
-            .sortedByDescending { chat.history.last(it)?.time ?: 0L }
+        val bonded = runCatching { chat.adapter?.bondedDevices?.toList() }.getOrNull() ?: emptyList()
+        val bondedAddresses = bonded.map { it.address }.toSet()
+        val known = chat.knownDevices()
 
-        rows += Row.Header(if (known.isEmpty()) "אין עדיין מכשירים מזווגים" else "המכשירים שלי")
+        rows += Row.Header(if (known.isEmpty()) "עוד לא התחברת לאף מכשיר" else "המכשירים שלי")
         for (address in known) {
             val last = chat.history.last(address)
             val preview = when {
-                last == null -> if (address in bonded) "מזווג · $address" else "לא מזווג · $address"
+                last == null -> if (address in bondedAddresses) "מזווג · $address" else "לא מזווג · $address"
                 last.kind == MsgKind.FILE -> "📎 ${last.fileName}"
                 else -> last.text ?: ""
             }
             val connected = chat.state == ChatController.State.CONNECTED && chat.peerAddress == address
             rows += Row.Device(address, chat.displayName(address), preview, known = true, connected = connected)
+        }
+
+        val others = bonded.filter { it.address !in known }
+        if ((showOthers || known.isEmpty()) && others.isNotEmpty()) {
+            rows += Row.Header("מכשירים מזווגים נוספים")
+            for (d in others) {
+                rows += Row.Device(
+                    d.address, chat.displayName(d.address), "מזווג · הקש כדי להתחבר",
+                    known = false, connected = false, paired = true
+                )
+            }
         }
 
         if (scanning || found.isNotEmpty()) {
@@ -166,7 +184,7 @@ class DevicesActivity : AppCompatActivity() {
     }
 
     private fun onDeviceClick(row: Row.Device) {
-        if (row.known) {
+        if (row.known || row.paired) {
             finishWith(row.address, connect = true)
             return
         }
@@ -184,14 +202,28 @@ class DevicesActivity : AppCompatActivity() {
         if (!row.known) return
         MaterialAlertDialogBuilder(this)
             .setTitle(row.title)
-            .setItems(arrayOf("התחבר", "הצג היסטוריה (בלי להתחבר)", "שנה שם", "מחק היסטוריה")) { _, which ->
+            .setItems(arrayOf("התחבר", "הצג היסטוריה (בלי להתחבר)", "שנה שם", "מחק היסטוריה", "הסר מהרשימה")) { _, which ->
                 when (which) {
                     0 -> finishWith(row.address, connect = true)
                     1 -> finishWith(row.address, connect = false)
                     2 -> Dialogs.rename(this, chat, row.address) { rebuild() }
                     3 -> Dialogs.confirmClearHistory(this, chat, row.address) { rebuild() }
+                    4 -> confirmRemove(row)
                 }
             }
+            .show()
+    }
+
+    private fun confirmRemove(row: Row.Device) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("הסרה מהרשימה")
+            .setMessage("להסיר את ${row.title} מהרשימה? גם ההיסטוריה איתו תימחק.\nהצימוד במערכת לא משתנה, ואפשר להתחבר אליו שוב דרך \"חפש מכשירים חדשים\".")
+            .setPositiveButton("הסר") { _, _ ->
+                chat.prefs.removeKnownDevice(row.address)
+                chat.clearHistory(row.address)
+                rebuild()
+            }
+            .setNegativeButton("ביטול", null)
             .show()
     }
 
@@ -238,6 +270,7 @@ class DevicesActivity : AppCompatActivity() {
             }
         }
         found.clear()
+        showOthers = true
         scanning = adapter.startDiscovery()
         if (!scanning) notice("לא ניתן להתחיל חיפוש")
         updateScanUi()

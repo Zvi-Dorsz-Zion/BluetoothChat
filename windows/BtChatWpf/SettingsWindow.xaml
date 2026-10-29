@@ -27,6 +27,15 @@
                     <TextBlock TextWrapping="Wrap" Text="קבצים מעל 1MB עוברים ברשת Wi-Fi המשותפת (או נקודה חמה של הטלפון) - מהיר בהרבה. אם אין רשת משותפת, עוברים ב-Bluetooth כרגיל."/>
                 </CheckBox>
 
+                <TextBlock Text="רשת ישירה עם הטלפון" FontWeight="SemiBold" Margin="0,12,0,4"/>
+                <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource TextSub}" Margin="0,0,0,6"
+                           Text="כשאין רשת משותפת, הטלפון פותח לרגע נקודה חמה פרטית והמחשב מתחבר אליה לבד - רק לקבצים מעל 5MB. בזמן ההעברה המחשב מתנתק מהרשת הרגילה שלו, וחוזר אליה אוטומטית בסיום."/>
+                <ComboBox x:Name="CmbDirect" Padding="8,6" HorizontalAlignment="Left" MinWidth="240">
+                    <ComboBoxItem Content="כבוי" Tag="off"/>
+                    <ComboBoxItem Content="רק כשאין רשת משותפת (מומלץ)" Tag="auto"/>
+                    <ComboBoxItem Content="תמיד לקבצים גדולים" Tag="always"/>
+                </ComboBox>
+
                 <TextBlock Text="תיקייה לקבצים שמתקבלים" Style="{StaticResource SectionTitle}"/>
                 <TextBox x:Name="TxtFolder" Style="{StaticResource FieldBox}" IsReadOnly="True" FlowDirection="LeftToRight"/>
                 <WrapPanel Margin="0,8,0,0">

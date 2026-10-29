@@ -25,6 +25,7 @@ import androidx.core.content.IntentCompat
 import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.btchat.app.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -41,6 +42,13 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
     private lateinit var adapter: MessageAdapter
     private var requestDialog: AlertDialog? = null
     private var pendingShare: List<Uri> = emptyList()
+    /** Device the shared files are meant for (null = whichever connects next). */
+    private var pendingShareTarget: String? = null
+    private var lastState: ChatController.State? = null
+    /** Conversation / scroll state when the screen was last left - to keep the position on return. */
+    private var shownConversation: String? = null
+    private var wasAtBottom = true
+    private var shownCount = 0
     private var cameraUri: Uri? = null
     private var askedPermissionsOnce = false
 
@@ -52,6 +60,10 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
         askedPermissionsOnce = true
         refreshAll()
     }
+
+    private val directPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { }
 
     private val enableBluetooth = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -119,12 +131,17 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
         chat.uiVisible = true
         if (hasBluetoothPermission()) chat.start()
         chat.conversation?.let { com.btchat.app.Notifications.cancelMessage(this, it) }
-        refreshAll()
+        val conversationChanged = shownConversation != chat.conversation
+        val newWhileAway = chat.messages.size > shownCount
+        refreshAll(scroll = conversationChanged || (wasAtBottom && newWhileAway))
         if (chat.state == ChatController.State.INCOMING_REQUEST) onIncomingRequest()
+        maybeAskDirectPermission()
     }
 
     override fun onStop() {
         super.onStop()
+        wasAtBottom = isAtBottom()
+        shownCount = chat.messages.size
         chat.uiVisible = false
         if (chat.ui === this) chat.ui = null
         requestDialog?.dismiss()
@@ -167,13 +184,21 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
     // ---------------------------------------------------------------- UI refresh
 
     @SuppressLint("NotifyDataSetChanged")
-    private fun refreshAll() {
+    private fun refreshAll(scroll: Boolean = true) {
         adapter.notifyDataSetChanged()
         updateHeader()
         updateBanner()
         updateInput()
         updateEmpty()
-        scrollToBottom()
+        if (scroll) scrollToBottom()
+        shownConversation = chat.conversation
+        shownCount = chat.messages.size
+    }
+
+    private fun isAtBottom(): Boolean {
+        val lm = binding.recycler.layoutManager as? LinearLayoutManager ?: return true
+        val last = lm.findLastVisibleItemPosition()
+        return last == RecyclerView.NO_POSITION || last >= chat.messages.size - 2
     }
 
     private fun updateHeader() {
@@ -248,19 +273,33 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
             requestDialog?.dismiss()
             requestDialog = null
         }
-        if (chat.canSend && pendingShare.isNotEmpty()) {
-            val uris = pendingShare
-            pendingShare = emptyList()
-            sendWithQuality(uris)
+        val state = chat.state
+        if (pendingShare.isNotEmpty()) {
+            val target = pendingShareTarget
+            if (chat.canSend && (target == null || target == chat.peerAddress)) {
+                val uris = pendingShare
+                pendingShare = emptyList()
+                pendingShareTarget = null
+                sendWithQuality(uris)
+            } else if (state == ChatController.State.LISTENING &&
+                (lastState == ChatController.State.CONNECTING || lastState == ChatController.State.AWAITING_APPROVAL)
+            ) {
+                pendingShare = emptyList() // the connection did not happen - don't send it unexpectedly later
+                pendingShareTarget = null
+                onNotice("השליחה בוטלה כי החיבור לא הצליח")
+            }
         }
+        lastState = state
     }
 
     override fun onConversationChanged() = refreshAll()
 
     override fun onMessageAdded(position: Int) {
+        val follow = isAtBottom() || chat.messages.getOrNull(position)?.outgoing == true
         adapter.notifyItemInserted(position)
         updateEmpty()
-        binding.recycler.scrollToPosition(position)
+        if (follow) binding.recycler.scrollToPosition(position)
+        shownCount = chat.messages.size
     }
 
     override fun onMessageChanged(position: Int, progressOnly: Boolean) {
@@ -384,9 +423,44 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
         if (uris.isEmpty()) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let { binding.editMessage.setText(it) }
         } else {
-            sendWithQuality(uris)
+            uris.forEach { keepAccess(it) }
+            chooseShareTarget(uris)
         }
         intent.action = null // don't handle again after rotation
+    }
+
+    /** Files shared from another app: ask which device gets them. */
+    private fun chooseShareTarget(uris: List<Uri>) {
+        val devices = chat.knownDevices()
+        val names = devices.map { address ->
+            val connected = chat.state == ChatController.State.CONNECTED && chat.peerAddress == address
+            chat.displayName(address) + if (connected) "  (מחובר)" else ""
+        }
+        val items = (names + "מכשיר אחר...").toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(if (uris.size == 1) "למי לשלוח?" else "למי לשלוח ${uris.size} קבצים?")
+            .setItems(items) { _, which ->
+                if (which >= devices.size) {
+                    pendingShare = uris
+                    pendingShareTarget = null
+                    openDevices()
+                } else {
+                    sendShareTo(devices[which], uris)
+                }
+            }
+            .setNegativeButton("ביטול", null)
+            .show()
+    }
+
+    private fun sendShareTo(address: String, uris: List<Uri>) {
+        if (chat.canSend && chat.peerAddress == address) {
+            sendWithQuality(uris)
+            return
+        }
+        pendingShare = uris
+        pendingShareTarget = address
+        chat.connect(address)
+        onNotice("מתחבר אל ${chat.displayName(address)}... הקבצים יישלחו כשהחיבור יאושר")
     }
 
     private fun keepAccess(uri: Uri) {
@@ -441,6 +515,10 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
         }
         val uri = readableUri(m) ?: return
         val mime = contentResolver.getType(uri) ?: FileStore.mimeOf(m.fileName ?: "")
+        if (mime == APK_MIME || m.fileName?.endsWith(".apk", ignoreCase = true) == true) {
+            installApk(uri)
+            return
+        }
         try {
             startActivity(
                 Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
@@ -449,6 +527,65 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
         } catch (_: ActivityNotFoundException) {
             onNotice("אין אפליקציה שיודעת לפתוח את הקובץ הזה")
         }
+    }
+
+    /** Android only lets an app hand an APK to the installer after "install unknown apps" was allowed for it. */
+    private fun installApk(uri: Uri) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("התקנת אפליקציה")
+                .setMessage(
+                    "כדי להתקין קבצי APK מתוך BT Chat צריך לאשר פעם אחת את ההרשאה " +
+                        "\"התקנת אפליקציות לא מוכרות\".\nאחרי האישור חזור לכאן ולחץ שוב על הקובץ."
+                )
+                .setPositiveButton("פתח הגדרות") { _, _ ->
+                    startActivity(
+                        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+                    )
+                }
+                .setNegativeButton("ביטול", null)
+                .show()
+            return
+        }
+        @Suppress("DEPRECATION")
+        val install = Intent(Intent.ACTION_INSTALL_PACKAGE).setData(uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            startActivity(install)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(
+                    Intent(Intent.ACTION_VIEW).setDataAndType(uri, APK_MIME)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                )
+            } catch (_: ActivityNotFoundException) {
+                onNotice("לא נמצא מתקין חבילות")
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- direct network permission
+
+    private fun directPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+        else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+    /** The phone's temporary hotspot needs a location / nearby-Wi-Fi permission. Ask once, with an explanation. */
+    private fun maybeAskDirectPermission() {
+        if (chat.prefs.directMode == "off" || chat.prefs.askedDirectPermission) return
+        if (directPermissions().all { granted(it) }) return
+        chat.prefs.askedDirectPermission = true
+        MaterialAlertDialogBuilder(this)
+            .setTitle("רשת ישירה למחשב")
+            .setMessage(
+                "כשהטלפון והמחשב לא מחוברים לאותה רשת, BT Chat יכול לפתוח בטלפון נקודה חמה זמנית " +
+                    "כדי להעביר קבצים גדולים מהר.\nאנדרואיד דורש לשם כך הרשאת מיקום" +
+                    (if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) ", וגם שהמיקום (GPS) יהיה פועל בזמן ההעברה." else ".") +
+                    "\nאפשר לשנות את זה בכל זמן בהגדרות."
+            )
+            .setPositiveButton("אשר") { _, _ -> directPermissionLauncher.launch(directPermissions()) }
+            .setNegativeButton("לא עכשיו", null)
+            .show()
     }
 
     private fun shareFile(m: ChatMessage) {
@@ -499,6 +636,7 @@ class MainActivity : AppCompatActivity(), ChatController.Ui {
     }
 
     companion object {
+        private const val APK_MIME = "application/vnd.android.package-archive"
         private const val KEY_CAMERA_URI = "camera_uri"
     }
 }

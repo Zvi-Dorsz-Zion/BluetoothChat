@@ -21,6 +21,16 @@ public static class BtProtocol
     public const byte TypeWifiOffer = 0x06;
     public const byte TypeWifiPull = 0x07;
     public const byte TypeWifiDecline = 0x08;
+    /// {platform, version} - sent by both sides right after the connection is approved.
+    public const byte TypeHello = 0x09;
+    /// Direct network: Windows asks the phone to open its temporary hotspot.
+    public const byte TypeNetRequest = 0x0A;
+    /// {ok, ssid, pass} - the phone's hotspot is up (or could not start).
+    public const byte TypeNetReady = 0x0B;
+    /// {ok} - Windows joined (or failed to join) the hotspot.
+    public const byte TypeNetJoined = 0x0C;
+    /// The phone closed the hotspot; Windows returns to its usual network.
+    public const byte TypeNetClose = 0x0D;
 
     public static void WriteJson(Stream output, byte type, System.Text.Json.Nodes.JsonObject json)
     {

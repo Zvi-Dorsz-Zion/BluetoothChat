@@ -45,6 +45,10 @@ public sealed class AppSettings
     public bool Notifications { get; set; } = true;
     public bool CloseToTray { get; set; } = true;
     public bool WifiEnabled { get; set; } = true;
+    /// Direct network (phone hotspot) when there is no common Wi-Fi: "off", "auto" or "always".
+    public string DirectMode { get; set; } = "auto";
+    /// Devices that connected through BT Chat at least once (only these appear in the list).
+    public List<string> KnownDevices { get; set; } = new();
     public string? SaveFolder { get; set; }
     /// "ask", "reduced" or "original"
     public string ImageQuality { get; set; } = "ask";

@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using InTheHand.Net;
 using InTheHand.Net.Sockets;
@@ -47,6 +48,10 @@ public partial class MainWindow : Window
         SetupTray();
         WireBluetooth();
         _bt.WifiEnabled = () => _settings.WifiEnabled;
+        _bt.DirectMode = () => _settings.DirectMode;
+        _bt.Notice += text => Ui(() => ShowInfo("רשת ישירה", text));
+        // Ctrl+V / "Paste" in the message box: files and images from the clipboard are sent as files.
+        CommandManager.AddPreviewExecutedHandler(EditMessage, EditMessage_PreviewExecuted);
         _retryListen.Tick += (_, _) => { _retryListen.Stop(); StartListening(); };
 
         Loaded += (_, _) =>
@@ -309,6 +314,11 @@ public partial class MainWindow : Window
 
     private void MarkConnected(PeerInfo peer)
     {
+        if (!_settings.KnownDevices.Contains(peer.Key))
+        {
+            _settings.KnownDevices.Add(peer.Key);
+            _settings.Save();
+        }
         _peer = peer;
         _cancelling = false;
         RememberName(peer);
@@ -455,18 +465,24 @@ public partial class MainWindow : Window
             paired = new List<BluetoothDeviceInfo>();
         }
 
-        var items = new Dictionary<string, DeviceItem>();
+        _paired.Clear();
         foreach (var d in paired)
         {
             var key = BluetoothService.KeyOf(d.DeviceAddress);
+            _paired[key] = d;
             if (!string.IsNullOrWhiteSpace(d.DeviceName)) _settings.KnownNames[key] = d.DeviceName;
-            items[key] = new DeviceItem { Key = key, Address = d.DeviceAddress, IsPaired = true };
-        }
-        foreach (var key in _history.Keys())
-        {
-            if (!items.ContainsKey(key)) items[key] = new DeviceItem { Key = key, IsPaired = false };
         }
         _settings.Save();
+
+        // Only devices that were actually used with BT Chat. Other paired devices
+        // (headphones, mice...) are offered in "צמד מכשיר חדש".
+        var items = new Dictionary<string, DeviceItem>();
+        foreach (var key in _settings.KnownDevices.Concat(_history.Keys()))
+        {
+            if (items.ContainsKey(key)) continue;
+            _paired.TryGetValue(key, out var info);
+            items[key] = new DeviceItem { Key = key, Address = info?.DeviceAddress, IsPaired = info != null };
+        }
 
         foreach (var item in items.Values)
         {
@@ -499,6 +515,8 @@ public partial class MainWindow : Window
     }
 
     private bool _selectingProgrammatically;
+    /// Every device paired in Windows, by key (for addresses and for the "other paired" list).
+    private readonly Dictionary<string, BluetoothDeviceInfo> _paired = new();
 
     private void SelectDeviceInList(string? key)
     {
@@ -564,6 +582,27 @@ public partial class MainWindow : Window
         if (MenuDevice(sender) is { } d) RenameDevice(d.Key);
     }
 
+    private void DeviceMenuRemove_Click(object sender, RoutedEventArgs e)
+    {
+        if (MenuDevice(sender) is not { } d) return;
+        int answer = DialogWindow.Ask(this, "הסרה מהרשימה",
+            $"להסיר את {d.DisplayName} מהרשימה? גם ההיסטוריה איתו תימחק.\nהצימוד ב-Windows לא משתנה, ואפשר להתחבר אליו שוב דרך \"צמד מכשיר חדש\".",
+            "הסר", "ביטול");
+        if (answer != 0) return;
+        _settings.KnownDevices.Remove(d.Key);
+        _settings.Trusted.Remove(d.Key);
+        _settings.Save();
+        _history.Clear(d.Key);
+        if (_conversationKey == d.Key)
+        {
+            _conversationKey = null;
+            _messages.Clear();
+        }
+        _devices.Remove(d);
+        TxtNoDevices.Visibility = _devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateUi();
+    }
+
     private void DeviceMenuClear_Click(object sender, RoutedEventArgs e)
     {
         if (MenuDevice(sender) is not { } d) return;
@@ -615,7 +654,10 @@ public partial class MainWindow : Window
 
     private void BtnPairNew_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new DevicePickerWindow { Owner = this };
+        var others = _paired.Values
+            .Where(p => _devices.All(d => d.Key != BluetoothService.KeyOf(p.DeviceAddress)))
+            .ToList();
+        var picker = new DevicePickerWindow(others) { Owner = this };
         if (picker.ShowDialog() != true || picker.PairedDevice == null) return;
         var device = picker.PairedDevice;
         var key = BluetoothService.KeyOf(device.DeviceAddress);
@@ -647,6 +689,37 @@ public partial class MainWindow : Window
     // ================================================================ sending
 
     private bool CanSend => _state == State.Connected && _peer != null && _conversationKey == _peer.Key;
+
+    private void EditMessage_PreviewExecuted(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (e.Command != ApplicationCommands.Paste) return;
+        try
+        {
+            if (Clipboard.ContainsFileDropList())
+            {
+                e.Handled = true;
+                var files = Clipboard.GetFileDropList().Cast<string>().Where(File.Exists).ToList();
+                if (files.Count > 0) SendFiles(files);
+            }
+            else if (Clipboard.ContainsImage() && !Clipboard.ContainsText())
+            {
+                e.Handled = true;
+                var image = Clipboard.GetImage();
+                if (image == null) return;
+                var dir = Path.Combine(Path.GetTempPath(), "BtChat", "clipboard");
+                Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, $"תמונה {DateTime.Now:yyyy-MM-dd HH-mm-ss}.png");
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(image));
+                using (var fs = File.Create(path)) encoder.Save(fs);
+                SendFiles(new List<string> { path });
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("paste failed: " + ex.Message);
+        }
+    }
 
     private void EditMessage_PreviewKeyDown(object sender, KeyEventArgs e)
     {

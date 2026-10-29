@@ -23,6 +23,16 @@ object BtProtocol {
     const val TYPE_WIFI_OFFER = 0x06
     const val TYPE_WIFI_PULL = 0x07
     const val TYPE_WIFI_DECLINE = 0x08
+    /** {platform, version} - sent by both sides right after the connection is approved. */
+    const val TYPE_HELLO = 0x09
+    /** Direct network (phone hotspot): Windows asks the phone to open one. */
+    const val TYPE_NET_REQUEST = 0x0A
+    /** {ok, ssid, pass} - the phone's temporary hotspot is up (or could not start). */
+    const val TYPE_NET_READY = 0x0B
+    /** {ok} - Windows joined (or failed to join) the hotspot. */
+    const val TYPE_NET_JOINED = 0x0C
+    /** The phone closed the hotspot; Windows returns to its usual network. */
+    const val TYPE_NET_CLOSE = 0x0D
 
     const val CHUNK = 16 * 1024
     const val MAX_FILE_SIZE = Int.MAX_VALUE - 4096L
