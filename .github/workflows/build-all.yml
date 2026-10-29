@@ -64,9 +64,8 @@ jobs:
           name: BtChat-windows-exe
           path: windows/BtChatWpf/publish/BtChat.exe
 
-  # Collects both builds into a DRAFT release (Releases page). Nothing is published
-  # until you open the draft and press "Publish release".
-  draft-release:
+  # Publishes a release (Releases page) with both builds as soon as they are ready.
+  release:
     needs: [ build-android, build-windows ]
     runs-on: ubuntu-latest
     permissions:
@@ -85,10 +84,11 @@ jobs:
           mv dist/BtChat.exe "dist/BtChat-${VERSION}.exe"
           ls -l dist
 
-      - name: Create draft release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          draft: false
+          make_latest: true
           tag_name: v${{ env.APP_VERSION }}.${{ github.run_number }}
           name: BT Chat ${{ env.APP_VERSION }}.${{ github.run_number }}
           body: |
